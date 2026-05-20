@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build and flash Clawdmeter firmware on macOS.
+# Build and flash PocketMeter firmware on macOS.
 # Usage:
 #   ./flash-mac.sh                       # auto-detect /dev/cu.usbmodem*
 #   ./flash-mac.sh /dev/cu.usbmodem1101  # explicit USB serial port
@@ -22,7 +22,7 @@ if ! command -v pio >/dev/null; then
     exit 1
 fi
 
-echo "=== Flashing Clawdmeter ==="
+echo "=== Flashing PocketMeter ==="
 echo "Port: $PORT"
 echo ""
 

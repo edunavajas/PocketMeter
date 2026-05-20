@@ -1,5 +1,5 @@
 #!/bin/bash
-# macOS installer for Clawdmeter daemon (Python + bleak + launchd).
+# macOS installer for PocketMeter daemon (Python + bleak + launchd).
 # Mirrors install.sh but uses LaunchAgents instead of systemd user units.
 set -e
 
@@ -13,7 +13,9 @@ LOG_DIR="$HOME/Library/Logs"
 LOG_OUT="$LOG_DIR/claude-usage-daemon.out.log"
 LOG_ERR="$LOG_DIR/claude-usage-daemon.err.log"
 
-echo "=== Clawdmeter macOS install ==="
+echo "=== PocketMeter macOS install ==="
+echo "Legacy BLE installer."
+echo "For the current WiFi+HTTP flow, use: python3 daemon/clawdmeter-daemon.py"
 echo ""
 
 echo "[1/5] Checking prerequisites..."

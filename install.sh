@@ -7,6 +7,8 @@ SERVICE_FILE="$SCRIPT_DIR/daemon/$SERVICE_NAME.service"
 USER_SERVICE_DIR="$HOME/.config/systemd/user"
 
 echo "=== Claude Usage Tracker - Install ==="
+echo "Legacy BLE installer for PocketMeter."
+echo "For the current WiFi+HTTP flow, use: python3 daemon/clawdmeter-daemon.py"
 echo ""
 
 # Check dependencies

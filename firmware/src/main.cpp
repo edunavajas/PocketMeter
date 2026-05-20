@@ -9,6 +9,8 @@
 #include "imu.h"
 #include "splash.h"
 #include "usage_rate.h"
+#include "wifi_manager.h"
+#include "web_server.h"
 
 // Physical buttons (global, screen-independent):
 //   BTN_BACK   (GPIO 0)  — left,  send Space (Claude Code voice mode push-to-talk)
@@ -163,12 +165,52 @@ static bool parse_json(const char* json, UsageData* out) {
         return false;
     }
 
-    out->session_pct = doc["s"] | 0.0f;
-    out->session_reset_mins = doc["sr"] | -1;
-    out->weekly_pct = doc["w"] | 0.0f;
-    out->weekly_reset_mins = doc["wr"] | -1;
-    strlcpy(out->status, doc["st"] | "unknown", sizeof(out->status));
-    out->ok = doc["ok"] | false;
+    // Check if it's the new multi-provider format
+    if (doc["providers"].is<JsonArray>()) {
+        JsonArray providers = doc["providers"];
+        out->provider_count = 0;
+        
+        for (JsonObject provider : providers) {
+            if (out->provider_count >= 2) break;
+            
+            ProviderData* pd = &out->providers[out->provider_count];
+            
+            strlcpy(pd->name, provider["provider"] | "unknown", sizeof(pd->name));
+            pd->session_pct = provider["session_pct"] | 0.0f;
+            pd->session_reset_mins = provider["session_reset"] | -1;
+            pd->weekly_pct = provider["weekly_pct"] | 0.0f;
+            pd->weekly_reset_mins = provider["weekly_reset"] | -1;
+            strlcpy(pd->status, provider["status"] | "unknown", sizeof(pd->status));
+            strlcpy(pd->plan_type, provider["plan_type"] | "", sizeof(pd->plan_type));
+            pd->credits_balance = provider["credits_balance"] | 0.0f;
+            pd->has_credits = provider["has_credits"] | false;
+            pd->simulated = provider["simulated"] | false;
+            pd->ok = provider["ok"] | false;
+            strlcpy(pd->error, provider["error"] | "", sizeof(pd->error));
+            
+            out->provider_count++;
+        }
+        
+        out->timestamp = doc["timestamp"] | 0;
+        out->valid = out->provider_count > 0;
+        return out->valid;
+    }
+    
+    // Legacy single-provider format (for backwards compatibility)
+    ProviderData* pd = &out->providers[0];
+    strlcpy(pd->name, "claude", sizeof(pd->name));
+    pd->session_pct = doc["s"] | 0.0f;
+    pd->session_reset_mins = doc["sr"] | -1;
+    pd->weekly_pct = doc["w"] | 0.0f;
+    pd->weekly_reset_mins = doc["wr"] | -1;
+    strlcpy(pd->status, doc["st"] | "unknown", sizeof(pd->status));
+    pd->ok = doc["ok"] | false;
+    pd->has_credits = false;
+    pd->simulated = false;
+    pd->error[0] = '\0';
+    
+    out->provider_count = 1;
+    out->timestamp = 0;
     out->valid = true;
     return true;
 }
@@ -278,8 +320,14 @@ void setup() {
     lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
     lv_indev_set_read_cb(indev, my_touch_cb);
 
-    // Init BLE data channel
+    // Init BLE (HID keyboard only — data now comes via WiFi)
     ble_init();
+
+    // Init WiFi
+    wifi_init();
+
+    // Init web server (receives usage data over HTTP)
+    web_server_init();
 
     // Physical buttons: back (GPIO 0) and forward (GPIO 18)
     pinMode(BTN_BACK, INPUT_PULLUP);
@@ -288,18 +336,18 @@ void setup() {
     // Build dashboard
     ui_init();
 
-    // Show initial BLE status on Bluetooth screen
-    ui_update_ble_status(ble_get_state(), ble_get_device_name(), ble_get_mac_address());
+    // Show initial network status on Network screen
+    ui_update_network_status(wifi_is_connected(), wifi_get_ssid(), wifi_get_ip(), wifi_get_rssi());
 
     // Show initial battery status
     ui_update_battery(power_battery_pct(), power_is_charging());
 
     ui_show_screen(SCREEN_SPLASH);
 
-    Serial.println("Dashboard ready, waiting for data on BLE...");
+    Serial.printf("Dashboard ready. WiFi IP: %s\n", wifi_get_ip());
 }
 
-static ble_state_t last_ble_state = BLE_STATE_INIT;
+static bool last_net_connected = false;
 
 // Brightness ramp state for rotation transition
 // On rotation change we blank the panel, force a full LVGL redraw at the
@@ -367,11 +415,14 @@ void loop() {
 
     handle_rotation_change();
 
-    // Update BLE status on screen when state changes
-    ble_state_t bs = ble_get_state();
-    if (bs != last_ble_state) {
-        last_ble_state = bs;
-        ui_update_ble_status(bs, ble_get_device_name(), ble_get_mac_address());
+    // WiFi auto-reconnect
+    wifi_check_connection();
+
+    // Update network status on screen when state changes
+    bool net_conn = wifi_is_connected();
+    if (net_conn != last_net_connected) {
+        last_net_connected = net_conn;
+        ui_update_network_status(net_conn, wifi_get_ssid(), wifi_get_ip(), wifi_get_rssi());
     }
 
     // Update battery indicator
@@ -385,25 +436,31 @@ void loop() {
         ui_update_battery(pct, charging);
     }
 
+    // Handle web server requests (must be called regularly)
+    web_server_handle();
+
     // Check for serial commands (screenshot, etc.)
     check_serial_cmd();
 
-    // Process incoming BLE data
-    if (ble_has_data()) {
-        if (parse_json(ble_get_data(), &usage)) {
+    // Process incoming WiFi data
+    if (web_server_has_data()) {
+        if (parse_json(web_server_get_data(), &usage)) {
+            ProviderData* current = &usage.providers[CURRENT_PROVIDER];
             int g_before = usage_rate_group();
-            usage_rate_sample(usage.session_pct);
+            usage_rate_sample(current->session_pct);
             int g_after = usage_rate_group();
             if (g_after != g_before) {
                 Serial.printf("usage rate: group %d -> %d (s=%.2f%%)\n",
-                    g_before, g_after, usage.session_pct);
+                    g_before, g_after, current->session_pct);
                 if (splash_is_active()) splash_pick_for_current_rate();
             }
             ui_update(&usage);
-            ble_send_ack();
+            web_server_set_last_data(&usage);
+            Serial.printf("WiFi: received %d providers\n", usage.provider_count);
         } else {
-            ble_send_nack();
+            Serial.println("WiFi: JSON parse failed");
         }
+        web_server_clear_data();
     }
 
     delay(5);
