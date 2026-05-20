@@ -260,18 +260,29 @@ class CodexProvider:
             
             with urllib.request.urlopen(req, timeout=10) as response:
                 data = json.loads(response.read().decode('utf-8'))
-                
+
                 rate_limit = data.get('rate_limit', {})
                 primary = rate_limit.get('primary_window', {})
                 secondary = rate_limit.get('secondary_window', {})
                 credits = data.get('credits', {})
-                
+
+                session_reset = int(primary.get('reset_after_seconds', 0) / 60)
+                weekly_reset = int(secondary.get('reset_after_seconds', 0) / 60)
+
+                # balance comes as string from the API
+                try:
+                    balance = float(credits.get('balance', 0))
+                except (ValueError, TypeError):
+                    balance = 0.0
+
                 return {
                     "provider": "codex",
                     "plan_type": data.get('plan_type', 'unknown'),
                     "session_pct": primary.get('used_percent', 0),
+                    "session_reset": session_reset,
                     "weekly_pct": secondary.get('used_percent', 0),
-                    "credits_balance": credits.get('balance', 0),
+                    "weekly_reset": weekly_reset,
+                    "credits_balance": balance,
                     "has_credits": credits.get('has_credits', False),
                     "ok": True
                 }
@@ -296,6 +307,10 @@ def merge_provider_data(providers):
     
     has_data = False
     for provider in providers:
+        # Re-check availability every poll so credentials added after startup are picked up
+        if not provider.available:
+            provider.check_available()
+
         if provider.available:
             result = provider.fetch_usage()
             if result:

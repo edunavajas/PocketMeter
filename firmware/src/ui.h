@@ -4,6 +4,7 @@
 enum screen_t {
     SCREEN_SPLASH,
     SCREEN_USAGE,
+    SCREEN_CODEX,    // only shown when Codex is configured
     SCREEN_NETWORK,
     SCREEN_COUNT,
 };
@@ -17,3 +18,4 @@ void ui_toggle_splash(void);
 screen_t ui_get_current_screen(void);
 void ui_update_network_status(bool connected, const char* ssid, const char* ip, int rssi);
 void ui_update_battery(int percent, bool charging);
+void ui_set_codex_available(bool available);

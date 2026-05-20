@@ -24,133 +24,164 @@ static const ProviderData* find_provider(const char* name) {
     return nullptr;
 }
 
-// Build HTML dashboard dynamically in RAM (no PROGMEM to avoid LoadProhibited)
-static String build_dashboard() {
+static String make_bar_html(float pct) {
+    const char* col = pct >= 80.0f ? "#c0392b" : (pct >= 50.0f ? "#d97757" : "#788c5d");
+    String bar = "<div style='background:#2a2a28;border-radius:4px;height:8px;margin:6px 0'>";
+    bar += "<div style='background:";
+    bar += col;
+    bar += ";height:8px;border-radius:4px;width:";
+    bar += String((int)pct);
+    bar += "%'></div></div>";
+    return bar;
+}
+
+static String make_provider_card(const char* name, const char* color,
+                                 const char* icon, const ProviderData* pd) {
     String html;
-    html.reserve(3000);
-    
-    bool conn = wifi_is_connected();
-    const char* status_color = conn ? "#788c5d" : "#c0392b";
-    const char* status_text = conn ? "Connected" : "Disconnected";
-    
-    html += "<!DOCTYPE html><html><head>";
-    html += "<meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'>";
-    html += "<title>PocketMeter Web Panel</title>";
-    html += "<meta http-equiv='refresh' content='5'>";
-    html += "<style>";
-    html += "body{background:#0a0a0a;color:#faf9f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;margin:0;padding:24px;max-width:480px;margin-left:auto;margin-right:auto}";
-    html += "h1{font-size:22px;font-weight:600;margin:0 0 20px 0;color:#d97757}";
-    html += ".card{background:#1f1f1e;border-radius:12px;padding:16px;margin-bottom:16px}";
-    html += ".card h2{font-size:14px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#b0aea5;margin:0 0 12px 0}";
-    html += ".row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #2a2a28}";
-    html += ".row:last-child{border-bottom:none}";
-    html += ".label{color:#b0aea5}";
-    html += ".value{font-weight:500}";
-    html += ".pill{display:inline-block;background:#2a2a28;border-radius:4px;padding:2px 8px;font-size:12px;font-family:monospace}";
-    html += ".footer{margin-top:24px;text-align:center;color:#666;font-size:12px}";
-    html += ".provider-icon{font-size:18px;margin-right:8px}";
-    html += ".connected{color:#788c5d}";
-    html += ".disconnected{color:#c0392b}";
-    html += ".config-link{color:#d97757;text-decoration:none;font-size:12px}";
-    html += "</style></head><body>";
-    
-    html += "<h1>PocketMeter</h1>";
-    
-    // WiFi Status Card
-    html += "<div class='card'><h2>WiFi Status</h2>";
-    html += "<div class='row'><span class='label'>Status</span><span class='value' style='color:";
-    html += status_color;
+    html.reserve(800);
+    bool ok = pd && pd->ok;
+
+    html += "<div class='card' style='border-left:3px solid ";
+    html += ok ? color : "#3a3a38";
     html += "'>";
-    html += status_text;
-    html += "</span></div>";
-    html += "<div class='row'><span class='label'>Network</span><span class='value'>";
-    html += wifi_get_ssid();
-    html += "</span></div>";
-    html += "<div class='row'><span class='label'>IP Address</span><span class='value pill'>";
-    html += wifi_get_ip();
-    html += "</span></div>";
-    html += "<div class='row'><span class='label'>Signal</span><span class='value'>";
-    html += wifi_get_rssi();
-    html += " dBm</span></div></div>";
-    
-    // Claude Card
-    html += "<div class='card'><h2>Claude</h2>";
-    const ProviderData* claude = find_provider("claude");
-    if (last_data_time > 0 && claude) {
-        const ProviderData* pd = claude;
-        html += "<div class='row'><span class='label'>Session</span><span class='value'>";
-        html += String(pd->session_pct, 1);
-        html += "%</span></div>";
-        html += "<div class='row'><span class='label'>Weekly</span><span class='value'>";
-        html += String(pd->weekly_pct, 1);
-        html += "%</span></div>";
-        html += "<div class='row'><span class='label'>Status</span><span class='value'>";
-        html += pd->status;
-        html += "</span></div>";
-        html += "<div class='row'><span class='label'>Source</span><span class='value'>";
-        html += pd->simulated ? "simulated fallback" : "real OAuth session";
-        html += "</span></div>";
+
+    // Header row: icon + name + status dot
+    html += "<div style='display:flex;align-items:center;justify-content:space-between;margin-bottom:12px'>";
+    html += "<div style='display:flex;align-items:center;gap:8px'>";
+    html += "<span style='font-size:20px'>";
+    html += icon;
+    html += "</span>";
+    html += "<span style='font-size:16px;font-weight:700;color:";
+    html += color;
+    html += "'>";
+    html += name;
+    html += "</span>";
+    html += "</div>";
+    if (ok) {
+        html += "<span style='background:";
+        html += color;
+        html += ";color:#000;font-size:11px;font-weight:600;padding:2px 8px;border-radius:20px'>Connected</span>";
+    } else {
+        html += "<span style='background:#2a2a28;color:#b0aea5;font-size:11px;padding:2px 8px;border-radius:20px'>Not configured</span>";
+    }
+    html += "</div>";
+
+    if (ok) {
         if (strlen(pd->plan_type) > 0) {
             html += "<div class='row'><span class='label'>Plan</span><span class='value'>";
             html += pd->plan_type;
             html += "</span></div>";
         }
-        if (strlen(pd->error) > 0) {
-            html += "<div class='row'><span class='label'>Note</span><span class='value' style='font-size:12px'>";
-            html += pd->error;
+        html += "<div class='row'><span class='label'>Session</span><span class='value'>";
+        html += String(pd->session_pct, 1);
+        html += "%</span></div>";
+        html += make_bar_html(pd->session_pct);
+        html += "<div class='row'><span class='label'>Weekly</span><span class='value'>";
+        html += String(pd->weekly_pct, 1);
+        html += "%</span></div>";
+        html += make_bar_html(pd->weekly_pct);
+        if (pd->has_credits) {
+            html += "<div class='row'><span class='label'>Credits</span><span class='value'>$";
+            html += String(pd->credits_balance, 2);
             html += "</span></div>";
         }
+        if (pd->simulated) {
+            html += "<div style='margin-top:8px;font-size:11px;color:#b0aea5'>&#9888; Simulated data (token may be expired)</div>";
+        }
     } else {
-        html += "<div class='row'><span class='label'>Status</span><span class='value disconnected'>No data received</span></div>";
-        html += "<div class='row'><span class='label'>Info</span><span class='value' style='font-size:12px'>Run: python3 daemon/clawdmeter-daemon.py</span></div>";
+        const char* cmd = (strcmp(name, "Claude") == 0) ? "claude" : "codex";
+        html += "<div style='padding:8px 0;color:#b0aea5;font-size:13px'>";
+        if (pd && strlen(pd->error) > 0) {
+            html += pd->error;
+        } else {
+            html += "No data received from daemon.";
+        }
+        html += "</div>";
+        html += "<div style='margin-top:8px;background:#0a0a0a;border-radius:6px;padding:8px;font-family:monospace;font-size:12px;color:#788c5d'>";
+        html += cmd;
+        html += " login";
+        html += "</div>";
+    }
+
+    html += "</div>";
+    return html;
+}
+
+// Build HTML dashboard dynamically in RAM (no PROGMEM to avoid LoadProhibited)
+static String build_dashboard() {
+    String html;
+    html.reserve(4000);
+
+    bool conn = wifi_is_connected();
+
+    html += "<!DOCTYPE html><html><head>";
+    html += "<meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>";
+    html += "<title>PocketMeter</title>";
+    html += "<meta http-equiv='refresh' content='10'>";
+    html += "<style>";
+    html += "body{background:#0a0a0a;color:#faf9f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;margin:0;padding:20px;max-width:480px;margin-left:auto;margin-right:auto}";
+    html += "h1{font-size:20px;font-weight:700;margin:0 0 4px 0;color:#faf9f5}";
+    html += ".subtitle{font-size:13px;color:#b0aea5;margin-bottom:20px}";
+    html += ".card{background:#1f1f1e;border-radius:12px;padding:16px;margin-bottom:14px}";
+    html += ".card h2{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:#b0aea5;margin:0 0 10px 0}";
+    html += ".row{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid #2a2a28}";
+    html += ".row:last-child{border-bottom:none}";
+    html += ".label{color:#b0aea5;font-size:13px}";
+    html += ".value{font-weight:500;font-size:13px}";
+    html += ".pill{display:inline-block;background:#2a2a28;border-radius:4px;padding:1px 7px;font-size:11px;font-family:monospace}";
+    html += ".footer{text-align:center;color:#444;font-size:11px;margin-top:20px}";
+    html += "</style></head><body>";
+
+    // Header
+    html += "<h1>PocketMeter</h1>";
+    html += "<div class='subtitle'>AI Usage Monitor";
+    if (last_data_time > 0) {
+        html += " &middot; Updated ";
+        html += String((millis() - last_data_time) / 1000);
+        html += "s ago";
     }
     html += "</div>";
 
-    // Codex Card
-    html += "<div class='card'><h2>Codex</h2>";
-    const ProviderData* codex = find_provider("codex");
-    if (last_data_time > 0 && codex && codex->ok) {
-        html += "<div class='row'><span class='label'>Plan</span><span class='value'>";
-        html += codex->plan_type;
+    // WiFi status (compact)
+    html += "<div class='card'><h2>Network</h2>";
+    html += "<div class='row'><span class='label'>WiFi</span><span class='value' style='color:";
+    html += conn ? "#788c5d" : "#c0392b";
+    html += "'>";
+    html += conn ? "Connected" : "Disconnected";
+    html += "</span></div>";
+    if (conn) {
+        html += "<div class='row'><span class='label'>SSID</span><span class='value'>";
+        html += wifi_get_ssid();
         html += "</span></div>";
-        html += "<div class='row'><span class='label'>Primary</span><span class='value'>";
-        html += String(codex->session_pct, 1);
-        html += "%</span></div>";
-        html += "<div class='row'><span class='label'>Secondary</span><span class='value'>";
-        html += String(codex->weekly_pct, 1);
-        html += "%</span></div>";
-        if (codex->has_credits) {
-            html += "<div class='row'><span class='label'>Credits</span><span class='value'>";
-            html += String(codex->credits_balance, 1);
-            html += "</span></div>";
-        }
-    } else if (codex && strlen(codex->error) > 0) {
-        html += "<div class='row'><span class='label'>Status</span><span class='value disconnected'>Not configured</span></div>";
-        html += "<div class='row'><span class='label'>Setup</span><span class='value' style='font-size:12px'>";
-        html += codex->error;
+        html += "<div class='row'><span class='label'>IP</span><span class='value pill'>";
+        html += wifi_get_ip();
         html += "</span></div>";
-    } else {
-        html += "<div class='row'><span class='label'>Status</span><span class='value disconnected'>No data</span></div>";
+        html += "<div class='row'><span class='label'>Signal</span><span class='value'>";
+        html += String(wifi_get_rssi());
+        html += " dBm</span></div>";
     }
     html += "</div>";
-    
-    // Device Card
+
+    // Provider cards
+    const ProviderData* claude = find_provider("claude");
+    html += make_provider_card("Claude", "#d97757", "&#129302;", claude);
+
+    const ProviderData* codex = find_provider("codex");
+    html += make_provider_card("Codex", "#10a37f", "&#9729;", codex);
+
+    // Device info
     html += "<div class='card'><h2>Device</h2>";
     html += "<div class='row'><span class='label'>Uptime</span><span class='value'>";
     html += String(millis() / 1000);
     html += "s</span></div>";
-    html += "<div class='row'><span class='label'>Last Update</span><span class='value'>";
-    if (last_data_time > 0) {
-        html += String((millis() - last_data_time) / 1000);
-        html += "s ago";
-    } else {
-        html += "Never";
-    }
-    html += "</span></div></div>";
-    
-    html += "<div class='footer'>PocketMeter Web Panel &middot; Auto-refresh 5s</div>";
+    html += "<div class='row'><span class='label'>Providers</span><span class='value'>";
+    html += String(last_data.provider_count);
+    html += " active</span></div>";
+    html += "</div>";
+
+    html += "<div class='footer'>PocketMeter &middot; Auto-refresh 10s</div>";
     html += "</body></html>";
-    
+
     return html;
 }
 

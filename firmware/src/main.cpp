@@ -454,9 +454,13 @@ void loop() {
                     g_before, g_after, current->session_pct);
                 if (splash_is_active()) splash_pick_for_current_rate();
             }
+            // Enable Codex screen only when provider[1] has valid data
+            bool codex_ok = (usage.provider_count > 1 && usage.providers[1].ok);
+            ui_set_codex_available(codex_ok);
             ui_update(&usage);
             web_server_set_last_data(&usage);
-            Serial.printf("WiFi: received %d providers\n", usage.provider_count);
+            Serial.printf("WiFi: received %d providers, codex=%s\n",
+                usage.provider_count, codex_ok ? "yes" : "no");
         } else {
             Serial.println("WiFi: JSON parse failed");
         }

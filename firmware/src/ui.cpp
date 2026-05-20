@@ -3,6 +3,7 @@
 #include <lvgl.h>
 #include "logo.h"
 #include "icons.h"
+#include "codex_icon.h"
 #include "display_cfg.h"
 
 // Custom fonts (scaled for 314 PPI, ~1.9x from original 165 PPI)
@@ -45,6 +46,21 @@ static lv_obj_t* lbl_weekly_pct;
 static lv_obj_t* lbl_weekly_label;
 static lv_obj_t* lbl_weekly_reset;
 static lv_obj_t* lbl_anim;
+
+// ---- Codex screen widgets ----
+static lv_obj_t* codex_container;
+static lv_obj_t* lbl_codex_session_pct;
+static lv_obj_t* lbl_codex_session_label;
+static lv_obj_t* bar_codex_session;
+static lv_obj_t* lbl_codex_session_reset;
+static lv_obj_t* lbl_codex_weekly_pct;
+static lv_obj_t* lbl_codex_weekly_label;
+static lv_obj_t* bar_codex_weekly;
+static lv_obj_t* lbl_codex_weekly_reset;
+static lv_obj_t* lbl_codex_credits;
+static lv_obj_t* codex_icon_img;
+static lv_image_dsc_t codex_icon_dsc;
+static bool codex_available = false;
 
 // ---- Network screen widgets ----
 static lv_obj_t* net_container;
@@ -279,6 +295,54 @@ static void init_usage_screen(lv_obj_t* scr) {
     lv_obj_align(lbl_anim, LV_ALIGN_BOTTOM_MID, 0, -15);
 }
 
+// ======== Codex Screen (480x480) ========
+
+static void init_codex_screen(lv_obj_t* scr) {
+    codex_container = lv_obj_create(scr);
+    lv_obj_set_size(codex_container, SCR_W, SCR_H);
+    lv_obj_set_pos(codex_container, 0, 0);
+    lv_obj_set_style_bg_opa(codex_container, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(codex_container, 0, 0);
+    lv_obj_set_style_pad_all(codex_container, 0, 0);
+    lv_obj_clear_flag(codex_container, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(codex_container, global_click_cb, LV_EVENT_CLICKED, NULL);
+
+    // Title "Codex" in teal
+    lv_obj_t* lbl_title = lv_label_create(codex_container);
+    lv_label_set_text(lbl_title, "Codex");
+    lv_obj_set_style_text_font(lbl_title, &font_tiempos_56, 0);
+    lv_obj_set_style_text_color(lbl_title, THEME_CODEX, 0);
+    lv_obj_align(lbl_title, LV_ALIGN_TOP_MID, 16, TITLE_Y);
+
+    // Session/Weekly panels (same layout as usage screen)
+    make_usage_panel(codex_container, CONTENT_Y, "Current",
+                     &lbl_codex_session_pct, &lbl_codex_session_label,
+                     &bar_codex_session, &lbl_codex_session_reset);
+    make_usage_panel(codex_container, CONTENT_Y + PANEL_H + PANEL_GAP, "Weekly",
+                     &lbl_codex_weekly_pct, &lbl_codex_weekly_label,
+                     &bar_codex_weekly, &lbl_codex_weekly_reset);
+
+    // Override bar indicator color to Codex teal
+    lv_obj_set_style_bg_color(bar_codex_session, THEME_CODEX, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(bar_codex_weekly,  THEME_CODEX, LV_PART_INDICATOR);
+
+    // Credits label at bottom
+    lbl_codex_credits = lv_label_create(codex_container);
+    lv_label_set_text(lbl_codex_credits, "");
+    lv_obj_set_style_text_font(lbl_codex_credits, &font_styrene_28, 0);
+    lv_obj_set_style_text_color(lbl_codex_credits, THEME_CODEX, 0);
+    lv_obj_align(lbl_codex_credits, LV_ALIGN_BOTTOM_MID, 0, -15);
+
+    // Cloud icon (top-left, same position as logo — logo is hidden on SCREEN_CODEX)
+    init_icon_dsc_rgb565a8(&codex_icon_dsc, CODEX_ICON_W, CODEX_ICON_H, codex_icon_data);
+    codex_icon_img = lv_image_create(scr);
+    lv_image_set_src(codex_icon_img, &codex_icon_dsc);
+    lv_obj_set_pos(codex_icon_img, MARGIN, TITLE_Y - 10);
+    lv_obj_add_flag(codex_icon_img, LV_OBJ_FLAG_HIDDEN);
+
+    lv_obj_add_flag(codex_container, LV_OBJ_FLAG_HIDDEN);
+}
+
 // ======== Network Screen (480x480) ========
 
 static void init_network_screen(lv_obj_t* scr) {
@@ -364,6 +428,7 @@ void ui_init(void) {
     init_battery_icons();
 
     init_usage_screen(scr);
+    init_codex_screen(scr);
     init_network_screen(scr);
     splash_init(scr);
 
@@ -385,13 +450,11 @@ void ui_init(void) {
 
 void ui_update(const UsageData* data) {
     if (!data->valid || data->provider_count == 0) return;
-    
-    // Use first provider (Claude) for usage screen
-    const ProviderData* pd = &data->providers[0];
 
+    // Claude usage screen (provider 0)
+    const ProviderData* pd = &data->providers[0];
     int s_pct = (int)(pd->session_pct + 0.5f);
 
-    // Usage screen
     lv_label_set_text_fmt(lbl_session_pct, "%d%%", s_pct);
     lv_bar_set_value(bar_session, s_pct, LV_ANIM_ON);
     lv_obj_set_style_bg_color(bar_session, pct_color(pd->session_pct), LV_PART_INDICATOR);
@@ -407,6 +470,35 @@ void ui_update(const UsageData* data) {
 
     format_reset_time(pd->weekly_reset_mins, buf, sizeof(buf));
     lv_label_set_text(lbl_weekly_reset, buf);
+
+    // Codex screen (provider 1, if present and ok)
+    if (data->provider_count > 1) {
+        const ProviderData* cx = &data->providers[1];
+        if (cx->ok) {
+            int cs_pct = (int)(cx->session_pct + 0.5f);
+            lv_label_set_text_fmt(lbl_codex_session_pct, "%d%%", cs_pct);
+            lv_bar_set_value(bar_codex_session, cs_pct, LV_ANIM_ON);
+            lv_obj_set_style_bg_color(bar_codex_session, pct_color(cx->session_pct), LV_PART_INDICATOR);
+            format_reset_time(cx->session_reset_mins, buf, sizeof(buf));
+            lv_label_set_text(lbl_codex_session_reset, buf);
+
+            int cw_pct = (int)(cx->weekly_pct + 0.5f);
+            lv_label_set_text_fmt(lbl_codex_weekly_pct, "%d%%", cw_pct);
+            lv_bar_set_value(bar_codex_weekly, cw_pct, LV_ANIM_ON);
+            lv_obj_set_style_bg_color(bar_codex_weekly, pct_color(cx->weekly_pct), LV_PART_INDICATOR);
+            format_reset_time(cx->weekly_reset_mins, buf, sizeof(buf));
+            lv_label_set_text(lbl_codex_weekly_reset, buf);
+
+            if (cx->has_credits) {
+                static char credits_buf[32];
+                snprintf(credits_buf, sizeof(credits_buf), "$%.2f credits",
+                         (double)cx->credits_balance);
+                lv_label_set_text(lbl_codex_credits, credits_buf);
+            } else {
+                lv_label_set_text(lbl_codex_credits, cx->plan_type[0] ? cx->plan_type : "");
+            }
+        }
+    }
 }
 
 void ui_tick_anim(void) {
@@ -454,20 +546,35 @@ static void global_click_cb(lv_event_t* e) {
 
 void ui_show_screen(screen_t screen) {
     lv_obj_add_flag(usage_container, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(codex_container, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(net_container, LV_OBJ_FLAG_HIDDEN);
+    if (codex_icon_img) lv_obj_add_flag(codex_icon_img, LV_OBJ_FLAG_HIDDEN);
     splash_hide();
 
     switch (screen) {
-    case SCREEN_SPLASH:     splash_show(); break;
-    case SCREEN_USAGE:      lv_obj_clear_flag(usage_container, LV_OBJ_FLAG_HIDDEN); break;
-    case SCREEN_NETWORK:    lv_obj_clear_flag(net_container, LV_OBJ_FLAG_HIDDEN); break;
-    default: break;
+    case SCREEN_SPLASH:
+        splash_show();
+        break;
+    case SCREEN_USAGE:
+        lv_obj_clear_flag(usage_container, LV_OBJ_FLAG_HIDDEN);
+        break;
+    case SCREEN_CODEX:
+        lv_obj_clear_flag(codex_container, LV_OBJ_FLAG_HIDDEN);
+        if (codex_icon_img) lv_obj_clear_flag(codex_icon_img, LV_OBJ_FLAG_HIDDEN);
+        break;
+    case SCREEN_NETWORK:
+        lv_obj_clear_flag(net_container, LV_OBJ_FLAG_HIDDEN);
+        break;
+    default:
+        break;
     }
 
-    // Hide the logo overlay on the splash screen so the animation has a clean canvas
+    // Hide logo on splash (clean canvas) and on Codex screen (replaced by cloud icon)
     if (logo_img) {
-        if (screen == SCREEN_SPLASH) lv_obj_add_flag(logo_img, LV_OBJ_FLAG_HIDDEN);
-        else                          lv_obj_clear_flag(logo_img, LV_OBJ_FLAG_HIDDEN);
+        if (screen == SCREEN_SPLASH || screen == SCREEN_CODEX)
+            lv_obj_add_flag(logo_img, LV_OBJ_FLAG_HIDDEN);
+        else
+            lv_obj_clear_flag(logo_img, LV_OBJ_FLAG_HIDDEN);
     }
 
     if (screen != SCREEN_SPLASH) prev_non_splash_screen = screen;
@@ -476,8 +583,23 @@ void ui_show_screen(screen_t screen) {
 }
 
 void ui_cycle_screen(void) {
-    screen_t next = (current_screen == SCREEN_USAGE) ? SCREEN_NETWORK : SCREEN_USAGE;
+    screen_t next;
+    if (current_screen == SCREEN_USAGE) {
+        next = codex_available ? SCREEN_CODEX : SCREEN_NETWORK;
+    } else if (current_screen == SCREEN_CODEX) {
+        next = SCREEN_NETWORK;
+    } else {
+        next = SCREEN_USAGE;
+    }
     ui_show_screen(next);
+}
+
+void ui_set_codex_available(bool available) {
+    codex_available = available;
+    // If we're on Codex screen and it became unavailable, go back to usage
+    if (!available && current_screen == SCREEN_CODEX) {
+        ui_show_screen(SCREEN_USAGE);
+    }
 }
 
 void ui_toggle_splash(void) {
