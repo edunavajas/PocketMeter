@@ -20,3 +20,4 @@ screen_t ui_get_current_screen(void);
 void ui_update_network_status(bool connected, const char* ssid, const char* ip, int rssi);
 void ui_update_battery(int percent, bool charging);
 void ui_set_codex_available(bool available);
+void ui_reconcile_provider_visibility(bool prefer_primary_provider);

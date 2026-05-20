@@ -417,26 +417,6 @@ void loop() {
         }
     }
 
-    // React immediately when web visibility toggles change
-    {
-        static bool last_claude_vis = true;
-        static bool last_codex_vis  = true;
-        bool claude_vis = web_server_claude_visible();
-        bool codex_vis  = web_server_codex_visible();
-        if (claude_vis != last_claude_vis || codex_vis != last_codex_vis) {
-            last_claude_vis = claude_vis;
-            last_codex_vis  = codex_vis;
-            screen_t cur = ui_get_current_screen();
-            // Redirect away from a screen that was just hidden
-            if ((cur == SCREEN_USAGE || cur == SCREEN_SPLASH) && !claude_vis) {
-                bool codex_ok = codex_vis && usage.provider_count > 1 && usage.providers[1].ok;
-                ui_show_screen(codex_ok ? SCREEN_CODEX : SCREEN_NETWORK);
-            } else if ((cur == SCREEN_CODEX || cur == SCREEN_CODEX_SPLASH) && !codex_vis) {
-                ui_show_screen(claude_vis ? SCREEN_USAGE : SCREEN_NETWORK);
-            }
-        }
-    }
-
     handle_rotation_change();
 
     // WiFi auto-reconnect
@@ -460,8 +440,26 @@ void loop() {
         ui_update_battery(pct, charging);
     }
 
-    // Handle web server requests (must be called regularly)
+    // Handle web server requests before reconciling screen visibility so web
+    // toggles take effect in the same loop iteration.
     web_server_handle();
+
+    // React immediately when web visibility toggles change.
+    {
+        static bool last_claude_vis = true;
+        static bool last_codex_vis  = true;
+        static web_provider_t last_selected_provider = WEB_PROVIDER_CLAUDE;
+        bool claude_vis = web_server_claude_visible();
+        bool codex_vis  = web_server_codex_visible();
+        web_provider_t selected_provider = web_server_selected_provider();
+        if (claude_vis != last_claude_vis || codex_vis != last_codex_vis ||
+            selected_provider != last_selected_provider) {
+            last_claude_vis = claude_vis;
+            last_codex_vis  = codex_vis;
+            last_selected_provider = selected_provider;
+            ui_reconcile_provider_visibility(true);
+        }
+    }
 
     // Check for serial commands (screenshot, etc.)
     check_serial_cmd();

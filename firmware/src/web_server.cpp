@@ -18,9 +18,65 @@ static unsigned long last_data_time = 0;
 // Display visibility toggles — changed via POST /api/config
 static bool g_claude_visible = true;
 static bool g_codex_visible  = true;
+static web_provider_t g_selected_provider = WEB_PROVIDER_CLAUDE;
+
+static const char* provider_name(web_provider_t provider) {
+    return provider == WEB_PROVIDER_CODEX ? "codex" : "claude";
+}
+
+static web_provider_t provider_from_name(const char* value) {
+    return (value && strcmp(value, "codex") == 0) ? WEB_PROVIDER_CODEX
+                                                    : WEB_PROVIDER_CLAUDE;
+}
+
+static web_provider_t normalize_selected_provider(bool claude_visible,
+                                                  bool codex_visible,
+                                                  web_provider_t selected) {
+    if (selected == WEB_PROVIDER_CODEX && !codex_visible && claude_visible) {
+        return WEB_PROVIDER_CLAUDE;
+    }
+    if (selected == WEB_PROVIDER_CLAUDE && !claude_visible && codex_visible) {
+        return WEB_PROVIDER_CODEX;
+    }
+    return selected;
+}
 
 bool web_server_claude_visible(void) { return g_claude_visible; }
 bool web_server_codex_visible(void)  { return g_codex_visible; }
+web_provider_t web_server_selected_provider(void) { return g_selected_provider; }
+
+static void append_config_script(String& html) {
+    html += "<script>(function(){";
+    html += "let inFlight=false;let queued=false;";
+    html += "let lastAck={claude:";
+    html += g_claude_visible ? "true" : "false";
+    html += ",codex:";
+    html += g_codex_visible ? "true" : "false";
+    html += ",selected_provider:'";
+    html += provider_name(g_selected_provider);
+    html += "'};";
+    html += "function boxes(){return{claude:document.getElementById('cfg-claude'),codex:document.getElementById('cfg-codex')}}";
+    html += "function radios(){return{claude:document.getElementById('sel-claude'),codex:document.getElementById('sel-codex')}}";
+    html += "function normalize(cfg,changed){const state={claude:!!cfg.claude,codex:!!cfg.codex,selected_provider:cfg.selected_provider==='codex'?'codex':'claude'};if(changed&&(changed==='claude'||changed==='codex')&&state[changed])state.selected_provider=changed;if(!state[state.selected_provider]){if(state.claude)state.selected_provider='claude';else if(state.codex)state.selected_provider='codex';}return state;}";
+    html += "function snapshot(changed){const b=boxes(),r=radios();const selected=r.codex&&r.codex.checked?'codex':'claude';return normalize({claude:!!(b.claude&&b.claude.checked),codex:!!(b.codex&&b.codex.checked),selected_provider:selected},changed)}";
+    html += "function sync(cfg){const state=normalize(cfg);const b=boxes(),r=radios();if(b.claude)b.claude.checked=state.claude;if(b.codex)b.codex.checked=state.codex;if(r.claude)r.claude.checked=state.selected_provider==='claude';if(r.codex)r.codex.checked=state.selected_provider==='codex';}";
+    html += "async function flush(changed){if(inFlight){queued=changed||true;return;}inFlight=true;const pending=changed||'';queued=false;";
+    html += "try{const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(snapshot(pending))});";
+    html += "if(!r.ok)throw new Error('config');const cfg=await r.json();if(typeof cfg.claude!=='boolean'||typeof cfg.codex!=='boolean'||(cfg.selected_provider!=='claude'&&cfg.selected_provider!=='codex'))throw new Error('payload');lastAck=cfg;sync(cfg);}catch(_e){sync(lastAck);}finally{const rerun=queued;queued=false;inFlight=false;if(rerun)flush(typeof rerun==='string'?rerun:'');}}";
+    html += "window.cfgChanged=function(provider){flush(provider||'');};window.cfgSelect=function(provider){const b=boxes(),r=radios();if(b[provider])b[provider].checked=true;if(r[provider])r[provider].checked=true;flush(provider);};window.syncConfig=sync;";
+    html += "})();</script>";
+}
+
+static void send_config_response() {
+    JsonDocument response;
+    response["claude"] = g_claude_visible;
+    response["codex"] = g_codex_visible;
+    response["selected_provider"] = provider_name(g_selected_provider);
+
+    String body;
+    serializeJson(response, body);
+    server.send(200, "application/json", body);
+}
 
 static const ProviderData* find_provider(const char* name) {
     for (int i = 0; i < last_data.provider_count && i < 2; ++i) {
@@ -183,16 +239,25 @@ static String build_dashboard() {
     html += ".sw input{opacity:0;width:0;height:0}";
     html += ".sl{position:absolute;cursor:pointer;inset:0;background:#2a2a28;border-radius:24px;transition:.2s}";
     html += ".sl:before{position:absolute;content:'';height:18px;width:18px;left:3px;bottom:3px;background:#b0aea5;border-radius:50%;transition:.2s}";
-    html += "input:checked+.sl{background:#788c5d}input:checked+.sl:before{transform:translateX(20px);background:#faf9f5}</style>";
-    html += "<script>function cfg(k,v){fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({[k]:v})})}</script>";
+    html += "input:checked+.sl{background:#788c5d}input:checked+.sl:before{transform:translateX(20px);background:#faf9f5}";
+    html += ".seg{display:flex;gap:8px}.seg label{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;background:#2a2a28;color:#faf9f5;font-size:12px}.seg input{accent-color:#788c5d}</style>";
+    append_config_script(html);
+    html += "<div style='font-size:12px;color:#b0aea5;margin-bottom:10px'>Visibility controls the mascot; active usage chooses which provider screen opens immediately.</div>";
     html += "<div class='trow'><span class='label' style='color:#d97757'>&#129302; Claude mascot</span>";
-    html += "<label class='sw'><input type='checkbox'";
+    html += "<label class='sw'><input id='cfg-claude' type='checkbox'";
     html += g_claude_visible ? " checked" : "";
-    html += " onchange=\"cfg('claude',this.checked)\"><span class='sl'></span></label></div>";
+    html += " onchange=\"cfgChanged('claude')\"><span class='sl'></span></label></div>";
     html += "<div class='trow'><span class='label' style='color:#10a37f'>&#9729; Codex mascot</span>";
-    html += "<label class='sw'><input type='checkbox'";
+    html += "<label class='sw'><input id='cfg-codex' type='checkbox'";
     html += g_codex_visible ? " checked" : "";
-    html += " onchange=\"cfg('codex',this.checked)\"><span class='sl'></span></label></div>";
+    html += " onchange=\"cfgChanged('codex')\"><span class='sl'></span></label></div>";
+    html += "<div class='trow'><span class='label'>Active usage</span><div class='seg'>";
+    html += "<label><input id='sel-claude' type='radio' name='selected-provider' value='claude'";
+    html += g_selected_provider == WEB_PROVIDER_CLAUDE ? " checked" : "";
+    html += " onchange=\"cfgSelect('claude')\">Claude</label>";
+    html += "<label><input id='sel-codex' type='radio' name='selected-provider' value='codex'";
+    html += g_selected_provider == WEB_PROVIDER_CODEX ? " checked" : "";
+    html += " onchange=\"cfgSelect('codex')\">Codex</label></div></div>";
     html += "</div>";
 
     // Device info
@@ -253,6 +318,10 @@ static void handle_status() {
     doc["uptime_ms"] = millis();
     doc["has_data"] = last_data_time > 0 && last_data.provider_count > 0;
     doc["provider_count"] = last_data.provider_count;
+    JsonObject config = doc["config"].to<JsonObject>();
+    config["claude"] = g_claude_visible;
+    config["codex"] = g_codex_visible;
+    config["selected_provider"] = provider_name(g_selected_provider);
     JsonArray providers = doc["providers"].to<JsonArray>();
     for (int i = 0; i < last_data.provider_count && i < 2; ++i) {
         JsonObject p = providers.add<JsonObject>();
@@ -298,9 +367,20 @@ static void handle_config() {
         server.send(400, "text/plain", "Bad JSON");
         return;
     }
-    if (doc["claude"].is<bool>()) g_claude_visible = doc["claude"].as<bool>();
-    if (doc["codex"].is<bool>())  g_codex_visible  = doc["codex"].as<bool>();
-    server.send(200, "text/plain", "OK");
+
+    if (!doc["claude"].is<bool>() || !doc["codex"].is<bool>() || !doc["selected_provider"].is<const char*>()) {
+        server.send(400, "text/plain", "Expected full config state");
+        return;
+    }
+
+    g_claude_visible = doc["claude"].as<bool>();
+    g_codex_visible  = doc["codex"].as<bool>();
+    g_selected_provider = normalize_selected_provider(
+        g_claude_visible,
+        g_codex_visible,
+        provider_from_name(doc["selected_provider"].as<const char*>())
+    );
+    send_config_response();
 }
 
 void web_server_init() {

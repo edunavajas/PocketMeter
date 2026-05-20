@@ -540,6 +540,53 @@ static void apply_battery_visibility(void) {
     else             lv_obj_clear_flag(battery_img, LV_OBJ_FLAG_HIDDEN);
 }
 
+static bool ui_claude_enabled(void) {
+    return web_server_claude_visible();
+}
+
+static bool ui_codex_enabled(void) {
+    return web_server_codex_visible() && codex_available;
+}
+
+static screen_t preferred_provider_usage_screen(void) {
+    if (web_server_selected_provider() == WEB_PROVIDER_CODEX) {
+        if (ui_codex_enabled())  return SCREEN_CODEX;
+        if (ui_claude_enabled()) return SCREEN_USAGE;
+    } else {
+        if (ui_claude_enabled()) return SCREEN_USAGE;
+        if (ui_codex_enabled())  return SCREEN_CODEX;
+    }
+    return SCREEN_NETWORK;
+}
+
+static screen_t fallback_for_hidden_screen(screen_t screen) {
+    switch (screen) {
+    case SCREEN_SPLASH:
+    case SCREEN_USAGE:
+    case SCREEN_CODEX_SPLASH:
+    case SCREEN_CODEX:
+        return preferred_provider_usage_screen();
+    case SCREEN_NETWORK:
+    default:
+        return SCREEN_NETWORK;
+    }
+}
+
+static bool screen_is_visible(screen_t screen) {
+    switch (screen) {
+    case SCREEN_SPLASH:
+    case SCREEN_USAGE:
+        return ui_claude_enabled();
+    case SCREEN_CODEX_SPLASH:
+    case SCREEN_CODEX:
+        return ui_codex_enabled();
+    case SCREEN_NETWORK:
+        return true;
+    default:
+        return false;
+    }
+}
+
 // LVGL handles click debouncing internally. Screen-level handler fires when
 // no child consumed the event (children only consume if they have their own
 // event callback, e.g. the Reset Bluetooth zone). On BT screen we skip the
@@ -594,8 +641,8 @@ void ui_show_screen(screen_t screen) {
 }
 
 void ui_cycle_screen(void) {
-    bool show_claude = web_server_claude_visible();
-    bool show_codex  = web_server_codex_visible() && codex_available;
+    bool show_claude = ui_claude_enabled();
+    bool show_codex  = ui_codex_enabled();
 
     screen_t next;
     if (current_screen == SCREEN_USAGE) {
@@ -603,38 +650,60 @@ void ui_cycle_screen(void) {
     } else if (current_screen == SCREEN_CODEX) {
         next = SCREEN_NETWORK;
     } else {
-        // SCREEN_NETWORK → back to first visible provider
-        if (show_claude)      next = SCREEN_USAGE;
-        else if (show_codex)  next = SCREEN_CODEX;
-        else                  next = SCREEN_NETWORK;
+        next = preferred_provider_usage_screen();
     }
     ui_show_screen(next);
 }
 
 void ui_set_codex_available(bool available) {
+    bool changed = (codex_available != available);
     codex_available = available;
-    // If we're on Codex screen and it became unavailable, go back to usage
-    if (!available && current_screen == SCREEN_CODEX) {
-        ui_show_screen(SCREEN_USAGE);
+    if (changed) {
+        ui_reconcile_provider_visibility(true);
+    }
+}
+
+void ui_reconcile_provider_visibility(bool prefer_primary_provider) {
+    screen_t target = current_screen;
+
+    if (prefer_primary_provider) {
+        target = preferred_provider_usage_screen();
+    } else if (!screen_is_visible(current_screen)) {
+        target = fallback_for_hidden_screen(current_screen);
+    } else if (current_screen == SCREEN_NETWORK && preferred_provider_usage_screen() != SCREEN_NETWORK) {
+        target = preferred_provider_usage_screen();
+    }
+
+    if (target != current_screen) {
+        ui_show_screen(target);
     }
 }
 
 void ui_toggle_splash(void) {
-    bool claude_on = web_server_claude_visible();
-    bool codex_on  = web_server_codex_visible() && codex_available;
+    bool claude_on = ui_claude_enabled();
+    bool codex_on  = ui_codex_enabled();
 
     if (current_screen == SCREEN_SPLASH) {
-        // Claude splash → Codex splash if enabled, else exit
+        // Claude splash → Usage Claude
+        if (claude_on) ui_show_screen(SCREEN_USAGE);
+        else if (codex_on) ui_show_screen(SCREEN_CODEX_SPLASH);
+    } else if (current_screen == SCREEN_USAGE) {
+        // Usage Claude → Codex splash (or back to Claude splash)
         if (codex_on) ui_show_screen(SCREEN_CODEX_SPLASH);
-        else          ui_show_screen(prev_non_splash_screen);
+        else if (claude_on) ui_show_screen(SCREEN_SPLASH);
     } else if (current_screen == SCREEN_CODEX_SPLASH) {
-        // Codex splash → exit back to usage
-        ui_show_screen(prev_non_splash_screen);
+        // Codex splash → Usage Codex
+        if (codex_on) ui_show_screen(SCREEN_CODEX);
+        else if (claude_on) ui_show_screen(SCREEN_SPLASH);
+    } else if (current_screen == SCREEN_CODEX) {
+        // Usage Codex → Claude splash (or back to Codex splash)
+        if (claude_on) ui_show_screen(SCREEN_SPLASH);
+        else if (codex_on) ui_show_screen(SCREEN_CODEX_SPLASH);
     } else {
-        // Any usage screen → start the mascot cycle
-        if (claude_on)      ui_show_screen(SCREEN_SPLASH);
-        else if (codex_on)  ui_show_screen(SCREEN_CODEX_SPLASH);
-        // else: both disabled, nothing to show
+        // For other screens (NETWORK, etc.), go to the preferred provider's splash
+        screen_t preferred = preferred_provider_usage_screen();
+        if (preferred == SCREEN_CODEX && codex_on) ui_show_screen(SCREEN_CODEX_SPLASH);
+        else if (preferred == SCREEN_USAGE && claude_on) ui_show_screen(SCREEN_SPLASH);
     }
 }
 
