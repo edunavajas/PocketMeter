@@ -4,7 +4,8 @@
 enum screen_t {
     SCREEN_SPLASH,
     SCREEN_USAGE,
-    SCREEN_CODEX,    // only shown when Codex is configured
+    SCREEN_CODEX,         // only shown when Codex is configured
+    SCREEN_CODEX_SPLASH,  // full-screen cloud animation (tap from SCREEN_CODEX)
     SCREEN_NETWORK,
     SCREEN_COUNT,
 };

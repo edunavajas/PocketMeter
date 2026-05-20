@@ -8,6 +8,7 @@
 #include "power.h"
 #include "imu.h"
 #include "splash.h"
+#include "codex_splash.h"
 #include "usage_rate.h"
 #include "wifi_manager.h"
 #include "web_server.h"
@@ -386,6 +387,7 @@ void loop() {
     power_tick();
     imu_tick();
     splash_tick();
+    codex_splash_tick();
 
     // Three-button input (global, screen-independent):
     //   LEFT  (GPIO 0)  → Space (voice-mode push-to-talk; press & release tracked)
@@ -408,8 +410,10 @@ void loop() {
         }
 
         if (power_pwr_pressed()) {
-            if (ui_get_current_screen() == SCREEN_SPLASH) splash_next();
-            else                                          ui_cycle_screen();
+            screen_t cur = ui_get_current_screen();
+            if (cur == SCREEN_SPLASH)       splash_next();
+            else if (cur == SCREEN_CODEX_SPLASH) codex_splash_next();
+            else                             ui_cycle_screen();
         }
     }
 

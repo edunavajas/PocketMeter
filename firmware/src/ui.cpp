@@ -1,5 +1,6 @@
 #include "ui.h"
 #include "splash.h"
+#include "codex_splash.h"
 #include <lvgl.h>
 #include "logo.h"
 #include "icons.h"
@@ -432,10 +433,13 @@ void ui_init(void) {
     init_network_screen(scr);
     splash_init(scr);
 
-    // Splash is touch-toggled — tap anywhere on the splash dismisses it
-    if (splash_get_root()) {
+    codex_splash_init(scr);
+
+    // Tap on either splash dismisses it
+    if (splash_get_root())
         lv_obj_add_event_cb(splash_get_root(), global_click_cb, LV_EVENT_CLICKED, NULL);
-    }
+    if (codex_splash_get_root())
+        lv_obj_add_event_cb(codex_splash_get_root(), global_click_cb, LV_EVENT_CLICKED, NULL);
 
     // Logo on top of all containers (inset for rounded corners)
     logo_img = lv_image_create(scr);
@@ -530,8 +534,9 @@ static screen_t prev_non_splash_screen = SCREEN_USAGE;
 // noisy over the pixel-art creature animations.
 static void apply_battery_visibility(void) {
     if (!battery_img) return;
-    if (current_screen == SCREEN_SPLASH) lv_obj_add_flag(battery_img, LV_OBJ_FLAG_HIDDEN);
-    else                                  lv_obj_clear_flag(battery_img, LV_OBJ_FLAG_HIDDEN);
+    bool splash_mode = (current_screen == SCREEN_SPLASH || current_screen == SCREEN_CODEX_SPLASH);
+    if (splash_mode) lv_obj_add_flag(battery_img, LV_OBJ_FLAG_HIDDEN);
+    else             lv_obj_clear_flag(battery_img, LV_OBJ_FLAG_HIDDEN);
 }
 
 // LVGL handles click debouncing internally. Screen-level handler fires when
@@ -550,6 +555,7 @@ void ui_show_screen(screen_t screen) {
     lv_obj_add_flag(net_container, LV_OBJ_FLAG_HIDDEN);
     if (codex_icon_img) lv_obj_add_flag(codex_icon_img, LV_OBJ_FLAG_HIDDEN);
     splash_hide();
+    codex_splash_hide();
 
     switch (screen) {
     case SCREEN_SPLASH:
@@ -562,6 +568,9 @@ void ui_show_screen(screen_t screen) {
         lv_obj_clear_flag(codex_container, LV_OBJ_FLAG_HIDDEN);
         if (codex_icon_img) lv_obj_clear_flag(codex_icon_img, LV_OBJ_FLAG_HIDDEN);
         break;
+    case SCREEN_CODEX_SPLASH:
+        codex_splash_show();
+        break;
     case SCREEN_NETWORK:
         lv_obj_clear_flag(net_container, LV_OBJ_FLAG_HIDDEN);
         break;
@@ -569,15 +578,16 @@ void ui_show_screen(screen_t screen) {
         break;
     }
 
-    // Hide logo on splash (clean canvas) and on Codex screen (replaced by cloud icon)
+    // Logo: hidden on splash screens and Codex screen (cloud icon takes its place)
     if (logo_img) {
-        if (screen == SCREEN_SPLASH || screen == SCREEN_CODEX)
-            lv_obj_add_flag(logo_img, LV_OBJ_FLAG_HIDDEN);
-        else
-            lv_obj_clear_flag(logo_img, LV_OBJ_FLAG_HIDDEN);
+        bool hide_logo = (screen == SCREEN_SPLASH || screen == SCREEN_CODEX ||
+                          screen == SCREEN_CODEX_SPLASH);
+        if (hide_logo) lv_obj_add_flag(logo_img, LV_OBJ_FLAG_HIDDEN);
+        else           lv_obj_clear_flag(logo_img, LV_OBJ_FLAG_HIDDEN);
     }
 
-    if (screen != SCREEN_SPLASH) prev_non_splash_screen = screen;
+    bool is_splash = (screen == SCREEN_SPLASH || screen == SCREEN_CODEX_SPLASH);
+    if (!is_splash) prev_non_splash_screen = screen;
     current_screen = screen;
     apply_battery_visibility();
 }
@@ -603,8 +613,10 @@ void ui_set_codex_available(bool available) {
 }
 
 void ui_toggle_splash(void) {
-    if (current_screen == SCREEN_SPLASH) ui_show_screen(prev_non_splash_screen);
-    else                                  ui_show_screen(SCREEN_SPLASH);
+    if (current_screen == SCREEN_SPLASH)        ui_show_screen(prev_non_splash_screen);
+    else if (current_screen == SCREEN_CODEX_SPLASH) ui_show_screen(SCREEN_CODEX);
+    else if (current_screen == SCREEN_CODEX)    ui_show_screen(SCREEN_CODEX_SPLASH);
+    else                                         ui_show_screen(SCREEN_SPLASH);
 }
 
 screen_t ui_get_current_screen(void) {
