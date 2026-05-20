@@ -417,6 +417,26 @@ void loop() {
         }
     }
 
+    // React immediately when web visibility toggles change
+    {
+        static bool last_claude_vis = true;
+        static bool last_codex_vis  = true;
+        bool claude_vis = web_server_claude_visible();
+        bool codex_vis  = web_server_codex_visible();
+        if (claude_vis != last_claude_vis || codex_vis != last_codex_vis) {
+            last_claude_vis = claude_vis;
+            last_codex_vis  = codex_vis;
+            screen_t cur = ui_get_current_screen();
+            // Redirect away from a screen that was just hidden
+            if ((cur == SCREEN_USAGE || cur == SCREEN_SPLASH) && !claude_vis) {
+                bool codex_ok = codex_vis && usage.provider_count > 1 && usage.providers[1].ok;
+                ui_show_screen(codex_ok ? SCREEN_CODEX : SCREEN_NETWORK);
+            } else if ((cur == SCREEN_CODEX || cur == SCREEN_CODEX_SPLASH) && !codex_vis) {
+                ui_show_screen(claude_vis ? SCREEN_USAGE : SCREEN_NETWORK);
+            }
+        }
+    }
+
     handle_rotation_change();
 
     // WiFi auto-reconnect

@@ -594,13 +594,19 @@ void ui_show_screen(screen_t screen) {
 }
 
 void ui_cycle_screen(void) {
+    bool show_claude = web_server_claude_visible();
+    bool show_codex  = web_server_codex_visible() && codex_available;
+
     screen_t next;
     if (current_screen == SCREEN_USAGE) {
-        next = codex_available ? SCREEN_CODEX : SCREEN_NETWORK;
+        next = show_codex ? SCREEN_CODEX : SCREEN_NETWORK;
     } else if (current_screen == SCREEN_CODEX) {
         next = SCREEN_NETWORK;
     } else {
-        next = SCREEN_USAGE;
+        // SCREEN_NETWORK → back to first visible provider
+        if (show_claude)      next = SCREEN_USAGE;
+        else if (show_codex)  next = SCREEN_CODEX;
+        else                  next = SCREEN_NETWORK;
     }
     ui_show_screen(next);
 }
