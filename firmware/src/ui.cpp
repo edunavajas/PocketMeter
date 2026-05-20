@@ -1,6 +1,7 @@
 #include "ui.h"
 #include "splash.h"
 #include "codex_splash.h"
+#include "web_server.h"
 #include <lvgl.h>
 #include "logo.h"
 #include "icons.h"
@@ -613,10 +614,22 @@ void ui_set_codex_available(bool available) {
 }
 
 void ui_toggle_splash(void) {
-    if (current_screen == SCREEN_SPLASH)        ui_show_screen(prev_non_splash_screen);
-    else if (current_screen == SCREEN_CODEX_SPLASH) ui_show_screen(SCREEN_CODEX);
-    else if (current_screen == SCREEN_CODEX)    ui_show_screen(SCREEN_CODEX_SPLASH);
-    else                                         ui_show_screen(SCREEN_SPLASH);
+    bool claude_on = web_server_claude_visible();
+    bool codex_on  = web_server_codex_visible() && codex_available;
+
+    if (current_screen == SCREEN_SPLASH) {
+        // Claude splash → Codex splash if enabled, else exit
+        if (codex_on) ui_show_screen(SCREEN_CODEX_SPLASH);
+        else          ui_show_screen(prev_non_splash_screen);
+    } else if (current_screen == SCREEN_CODEX_SPLASH) {
+        // Codex splash → exit back to usage
+        ui_show_screen(prev_non_splash_screen);
+    } else {
+        // Any usage screen → start the mascot cycle
+        if (claude_on)      ui_show_screen(SCREEN_SPLASH);
+        else if (codex_on)  ui_show_screen(SCREEN_CODEX_SPLASH);
+        // else: both disabled, nothing to show
+    }
 }
 
 screen_t ui_get_current_screen(void) {

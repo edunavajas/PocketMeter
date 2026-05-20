@@ -15,6 +15,13 @@ static volatile bool data_ready = false;
 static UsageData last_data = {};
 static unsigned long last_data_time = 0;
 
+// Display visibility toggles — changed via POST /api/config
+static bool g_claude_visible = true;
+static bool g_codex_visible  = true;
+
+bool web_server_claude_visible(void) { return g_claude_visible; }
+bool web_server_codex_visible(void)  { return g_codex_visible; }
+
 static const ProviderData* find_provider(const char* name) {
     for (int i = 0; i < last_data.provider_count && i < 2; ++i) {
         if (strcmp(last_data.providers[i].name, name) == 0) {
@@ -169,6 +176,25 @@ static String build_dashboard() {
     const ProviderData* codex = find_provider("codex");
     html += make_provider_card("Codex", "#10a37f", "&#9729;", codex);
 
+    // Display visibility toggles
+    html += "<div class='card'><h2>Display</h2>";
+    html += "<style>.trow{display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid #2a2a28}.trow:last-child{border-bottom:none}";
+    html += ".sw{position:relative;display:inline-block;width:44px;height:24px}";
+    html += ".sw input{opacity:0;width:0;height:0}";
+    html += ".sl{position:absolute;cursor:pointer;inset:0;background:#2a2a28;border-radius:24px;transition:.2s}";
+    html += ".sl:before{position:absolute;content:'';height:18px;width:18px;left:3px;bottom:3px;background:#b0aea5;border-radius:50%;transition:.2s}";
+    html += "input:checked+.sl{background:#788c5d}input:checked+.sl:before{transform:translateX(20px);background:#faf9f5}</style>";
+    html += "<script>function cfg(k,v){fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({[k]:v})})}</script>";
+    html += "<div class='trow'><span class='label' style='color:#d97757'>&#129302; Claude mascot</span>";
+    html += "<label class='sw'><input type='checkbox'";
+    html += g_claude_visible ? " checked" : "";
+    html += " onchange=\"cfg('claude',this.checked)\"><span class='sl'></span></label></div>";
+    html += "<div class='trow'><span class='label' style='color:#10a37f'>&#9729; Codex mascot</span>";
+    html += "<label class='sw'><input type='checkbox'";
+    html += g_codex_visible ? " checked" : "";
+    html += " onchange=\"cfg('codex',this.checked)\"><span class='sl'></span></label></div>";
+    html += "</div>";
+
     // Device info
     html += "<div class='card'><h2>Device</h2>";
     html += "<div class='row'><span class='label'>Uptime</span><span class='value'>";
@@ -259,11 +285,30 @@ static void handle_health() {
     server.send(200, "text/plain", "OK");
 }
 
+static void handle_config() {
+    if (server.method() != HTTP_POST) {
+        server.send(405, "text/plain", "Method Not Allowed");
+        return;
+    }
+    String body = server.hasArg("plain") ? server.arg("plain") : server.arg(0);
+    if (body.length() == 0) { server.send(400, "text/plain", "Bad Request"); return; }
+
+    JsonDocument doc;
+    if (deserializeJson(doc, body) != DeserializationError::Ok) {
+        server.send(400, "text/plain", "Bad JSON");
+        return;
+    }
+    if (doc["claude"].is<bool>()) g_claude_visible = doc["claude"].as<bool>();
+    if (doc["codex"].is<bool>())  g_codex_visible  = doc["codex"].as<bool>();
+    server.send(200, "text/plain", "OK");
+}
+
 void web_server_init() {
     server.on("/", HTTP_GET, handle_root);
     server.on(DATA_ENDPOINT, HTTP_POST, handle_usage);
     server.on(STATUS_ENDPOINT, HTTP_GET, handle_status);
     server.on("/api/health", HTTP_GET, handle_health);
+    server.on("/api/config", HTTP_POST, handle_config);
     
     server.begin();
     Serial.printf("Web server started on port %d\n", WEB_SERVER_PORT);

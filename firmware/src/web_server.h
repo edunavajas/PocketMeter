@@ -8,3 +8,7 @@ bool web_server_has_data(void);
 const char* web_server_get_data(void);
 void web_server_clear_data(void);
 void web_server_set_last_data(const UsageData* data);
+
+// Display visibility toggles (set from /api/config, read by ui.cpp)
+bool web_server_claude_visible(void);
+bool web_server_codex_visible(void);
