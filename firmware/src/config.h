@@ -1,8 +1,14 @@
 #pragma once
 
-// WiFi credentials - HARDCODED (editar antes de compilar)
-#define WIFI_SSID ""
-#define WIFI_PASSWORD ""
+// WiFi credentials are read from wifi_credentials.h (ignored by git).
+// Copy wifi_credentials.h.example to wifi_credentials.h and fill in your values.
+#if __has_include("wifi_credentials.h")
+  #include "wifi_credentials.h"
+#else
+  #define WIFI_SSID ""
+  #define WIFI_PASSWORD ""
+#endif
+
 #define WIFI_HOSTNAME "pocketmeter"
 #define WIFI_TIMEOUT_MS 10000
 

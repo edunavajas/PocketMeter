@@ -1,3 +1,6 @@
+# WiFi credentials — never commit real values
+firmware/src/wifi_credentials.h
+
 # PlatformIO build artifacts
 firmware/.pio/
 firmware/.vscode/
@@ -21,4 +24,6 @@ __pycache__/
 .atl/
 *.log
 *.pid
+*.bak
+*.backup
 YOUTUBE SCRIPT.MD

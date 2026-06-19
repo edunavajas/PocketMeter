@@ -81,6 +81,11 @@ run_foreground() {
   log "Starting web UI in background for foreground stack run"
   bash "$SCRIPT_DIR/web-server.sh" &
   local web_pid=$!
+  sleep 1
+  if ! kill -0 "$web_pid" 2>/dev/null; then
+    log "Web server failed to start. Check daemon/web-server.log"
+    exit 1
+  fi
 
   cleanup() {
     kill "$web_pid" 2>/dev/null || true

@@ -17,13 +17,17 @@ PYTHON="${PYTHON:-python3}"
 
 # Auto-detect Pillow in nix store if not already importable
 if ! "$PYTHON" -c "import PIL" 2>/dev/null; then
-  PY_VER=$("$PYTHON" -c "import sys; print(f'python{sys.version_info.major}.{sys.version_info.minor}')")
-  NIX_PIL_DIR=$(find /nix/store -maxdepth 6 -name "PIL" -type d 2>/dev/null | grep "/${PY_VER}/site-packages" | head -1)
+  PY_VER=$("$PYTHON" -c "import sys; print(f'python{sys.version_info.major}.${sys.version_info.minor}')")
+  NIX_PIL_DIR=""
+  if [[ -d /nix/store ]]; then
+    NIX_PIL_DIR=$(find /nix/store -maxdepth 6 -name "PIL" -type d 2>/dev/null | grep "/${PY_VER}/site-packages" | head -1 || true)
+  fi
   if [[ -n "$NIX_PIL_DIR" ]]; then
     NIX_SITEPKGS="${NIX_PIL_DIR%/PIL}"
     export PYTHONPATH="${NIX_SITEPKGS}${PYTHONPATH:+:$PYTHONPATH}"
     echo "[web-server] Using Pillow from: $NIX_SITEPKGS" >&2
   fi
+fi
 fi
 
 # Defaults
