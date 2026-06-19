@@ -1,9 +1,10 @@
 #!/bin/bash
-# Claude Usage Tracker Daemon (WiFi) - DEMO VERSION
+# PocketMeter Daemon (WiFi) - Demo Version
 # Simulates usage data for testing the display
 # Dependencies: curl
 
-DEVICE_IP_FILE="$HOME/.config/claude-usage-monitor/esp-ip"
+DEVICE_IP_FILE="$HOME/.config/pocketmeter/esp-ip"
+LEGACY_DEVICE_IP_FILE="$HOME/.config/claude-usage-monitor/esp-ip"
 POLL_INTERVAL=10
 TICK=5
 
@@ -13,12 +14,14 @@ log() {
 
 # Load saved IP
 load_ip() {
-    if [ -f "$DEVICE_IP_FILE" ]; then
-        DEVICE_IP=$(head -1 "$DEVICE_IP_FILE" | tr -d '\r\n ')
-        if [ -n "$DEVICE_IP" ]; then
-            return 0
+    for cache_file in "$DEVICE_IP_FILE" "$LEGACY_DEVICE_IP_FILE"; do
+        if [ -f "$cache_file" ]; then
+            DEVICE_IP=$(head -1 "$cache_file" | tr -d '\r\n ')
+            if [ -n "$DEVICE_IP" ]; then
+                return 0
+            fi
         fi
-    fi
+    done
     return 1
 }
 
@@ -40,7 +43,7 @@ generate_data() {
     echo "{\"s\":$session,\"sr\":$((120 - session)),\"w\":$weekly,\"wr\":$((7200 - weekly * 60)),\"st\":\"$status\",\"ok\":true}"
 }
 
-log "=== Claude Usage Tracker Daemon (WiFi DEMO) ==="
+log "=== PocketMeter Daemon (WiFi Demo) ==="
 log "Poll interval: ${POLL_INTERVAL}s"
 log "Sending simulated data to test the display"
 

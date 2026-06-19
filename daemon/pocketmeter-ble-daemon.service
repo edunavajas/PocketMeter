@@ -1,5 +1,5 @@
 [Unit]
-Description=Claude Usage Tracker Daemon (BLE)
+Description=PocketMeter BLE Daemon
 Requires=bluetooth.target
 After=bluetooth.target
 

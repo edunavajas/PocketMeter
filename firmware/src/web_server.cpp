@@ -3,12 +3,26 @@
 #include "wifi_manager.h"
 #include "data.h"
 #include <WebServer.h>
+
+// Forward declarations for splash functions (avoids pulling in lvgl.h)
+extern int splash_anim_count(void);
+extern const char* splash_anim_name(int idx);
+extern const char* splash_anim_category(int idx);
+extern bool splash_set_custom(const char* name, const char* cat, const char* provider,
+                               const uint16_t pal[10],
+                               const char* frames_str, uint16_t fc,
+                               const uint16_t* holds);
+extern void splash_pin_by_name(const char* name);
 #include <ArduinoJson.h>
+#include <Preferences.h>
 
 static WebServer server(WEB_SERVER_PORT);
+static Preferences prefs;
 
-// Incoming data buffer
-static char rx_buf[512];
+// Incoming data buffer — sized for up to MAX_PROVIDERS providers
+static char rx_buf[4096];
+// Separate buffer for custom-anim payloads (frames string alone can be 3200 chars)
+static char custom_anim_buf[4096];
 static volatile bool data_ready = false;
 
 // Last received usage data for status endpoint
@@ -19,6 +33,48 @@ static unsigned long last_data_time = 0;
 static bool g_claude_visible = true;
 static bool g_codex_visible  = true;
 static web_provider_t g_selected_provider = WEB_PROVIDER_CLAUDE;
+static WebPetConfig g_pet_configs[2] = {};
+
+// Extended multi-provider state
+static char g_selected_provider_name[PROVIDER_NAME_LEN] = "claude";
+static char g_splash_pin[64] = "";
+
+struct ExtraProviderConfig {
+    char name[PROVIDER_NAME_LEN];
+    bool visible;
+};
+static ExtraProviderConfig g_extra_configs[MAX_PROVIDERS] = {};
+static int g_extra_config_count = 0;
+
+struct ExtraPetEntry {
+    char name[PROVIDER_NAME_LEN];
+    WebPetConfig pet;
+};
+static ExtraPetEntry g_extra_pets[MAX_PROVIDERS] = {};
+static int g_extra_pet_count = 0;
+
+static void extra_config_set_visible(const char* name, bool visible);
+
+static const char* kPrefsNamespace = "webcfg";
+static const char* kPrefsStateKey = "state";
+
+static const size_t PET_ID_LEN = sizeof(g_pet_configs[0].id);
+static const size_t PET_SLUG_LEN = sizeof(g_pet_configs[0].slug);
+static const size_t PET_NAME_LEN = sizeof(g_pet_configs[0].display_name);
+static const size_t PET_PATH_LEN = sizeof(g_pet_configs[0].spritesheet_path);
+static const size_t PET_COLOR_LEN = sizeof(g_pet_configs[0].dominant_color);
+
+static int provider_index(web_provider_t provider) {
+    return provider == WEB_PROVIDER_CODEX ? 1 : 0;
+}
+
+static WebPetConfig* pet_config_for(web_provider_t provider) {
+    return &g_pet_configs[provider_index(provider)];
+}
+
+static const WebPetConfig* pet_config_for_const(web_provider_t provider) {
+    return &g_pet_configs[provider_index(provider)];
+}
 
 static const char* provider_name(web_provider_t provider) {
     return provider == WEB_PROVIDER_CODEX ? "codex" : "claude";
@@ -41,37 +97,294 @@ static web_provider_t normalize_selected_provider(bool claude_visible,
     return selected;
 }
 
+static WebPetConfig* find_pet_by_name(const char* name) {
+    if (!name) return nullptr;
+    if (strcmp(name, "claude") == 0) return &g_pet_configs[0];
+    if (strcmp(name, "codex") == 0)  return &g_pet_configs[1];
+    for (int i = 0; i < g_extra_pet_count; ++i)
+        if (strcmp(g_extra_pets[i].name, name) == 0)
+            return &g_extra_pets[i].pet;
+    return nullptr;
+}
+
+static WebPetConfig* get_or_create_pet_slot(const char* name) {
+    WebPetConfig* existing = find_pet_by_name(name);
+    if (existing) return existing;
+    if (g_extra_pet_count >= MAX_PROVIDERS) return nullptr;
+    strlcpy(g_extra_pets[g_extra_pet_count].name, name, PROVIDER_NAME_LEN);
+    memset(&g_extra_pets[g_extra_pet_count].pet, 0, sizeof(WebPetConfig));
+    return &g_extra_pets[g_extra_pet_count++].pet;
+}
+
+static void clear_pet_config(WebPetConfig* pet) {
+    if (!pet) return;
+    memset(pet, 0, sizeof(*pet));
+}
+
+static void sanitize_string_copy(char* dest, size_t dest_len, const char* src) {
+    if (!dest || dest_len == 0) return;
+    if (!src) {
+        dest[0] = '\0';
+        return;
+    }
+    strlcpy(dest, src, dest_len);
+}
+
+static bool has_text(const char* value) {
+    return value && value[0] != '\0';
+}
+
+static void write_pet_json(JsonObject json, const WebPetConfig& pet) {
+    json["assigned"] = pet.assigned;
+    json["id"] = pet.id;
+    json["slug"] = pet.slug;
+    json["displayName"] = pet.display_name;
+    json["spritesheetPath"] = pet.spritesheet_path;
+    json["petJsonPath"] = pet.pet_json_path;
+    json["dominantColor"] = pet.dominant_color;
+    json["previewImagePath"] = pet.preview_image_path;
+}
+
+static void write_config_json(JsonObject json) {
+    json["claude"] = g_claude_visible;
+    json["codex"]  = g_codex_visible;
+    json["selected_provider"]     = provider_name(g_selected_provider);
+    json["selected_provider_ext"] = g_selected_provider_name;
+    json["splash_pin"] = g_splash_pin;
+
+    JsonArray providers_arr = json["providers"].to<JsonArray>();
+    for (int i = 0; i < last_data.provider_count && i < MAX_PROVIDERS; ++i) {
+        providers_arr.add(last_data.providers[i].name);
+    }
+    if (last_data.provider_count == 0) {
+        providers_arr.add("claude");
+        providers_arr.add("codex");
+    }
+
+    JsonObject pets = json["pets"].to<JsonObject>();
+    write_pet_json(pets["claude"].to<JsonObject>(), *pet_config_for_const(WEB_PROVIDER_CLAUDE));
+    write_pet_json(pets["codex"].to<JsonObject>(),  *pet_config_for_const(WEB_PROVIDER_CODEX));
+    for (int i = 0; i < g_extra_pet_count; ++i)
+        write_pet_json(pets[g_extra_pets[i].name].to<JsonObject>(), g_extra_pets[i].pet);
+
+    JsonObject extra_vis = json["provider_visibility"].to<JsonObject>();
+    for (int i = 0; i < g_extra_config_count; ++i) {
+        extra_vis[g_extra_configs[i].name] = g_extra_configs[i].visible;
+    }
+}
+
+static String serialize_current_config() {
+    JsonDocument doc;
+    write_config_json(doc.to<JsonObject>());
+    String body;
+    serializeJson(doc, body);
+    return body;
+}
+
+static void save_config_state() {
+    if (!prefs.begin(kPrefsNamespace, false)) {
+        Serial.println("Config save failed: prefs begin");
+        return;
+    }
+    prefs.putString(kPrefsStateKey, serialize_current_config());
+    prefs.end();
+}
+
+static bool parse_pet_config(JsonVariantConst source, WebPetConfig* out_pet, String* error) {
+    if (!out_pet) return false;
+
+    if (source.isNull()) {
+        clear_pet_config(out_pet);
+        return true;
+    }
+
+    if (!source.is<JsonObjectConst>()) {
+        if (error) *error = "Pet config must be an object or null";
+        return false;
+    }
+
+    JsonObjectConst pet = source.as<JsonObjectConst>();
+    const char* id = pet["id"] | "";
+    const char* slug = pet["slug"] | "";
+    const char* display_name = pet["displayName"] | "";
+    const char* spritesheet_path = pet["spritesheetPath"] | "";
+    const char* pet_json_path = pet["petJsonPath"] | "";
+    const char* dominant_color = pet["dominantColor"] | "";
+    const char* preview_image_path = pet["previewImagePath"] | spritesheet_path;
+
+    bool assigned_flag = pet["assigned"] | true;
+    if (!assigned_flag || (!has_text(id) && !has_text(slug))) {
+        clear_pet_config(out_pet);
+        return true;
+    }
+    if (!has_text(display_name)) {
+        if (error) *error = "Pet config requires displayName";
+        return false;
+    }
+    if (!has_text(spritesheet_path) && !has_text(pet_json_path)) {
+        if (error) *error = "Pet config requires spritesheetPath or petJsonPath";
+        return false;
+    }
+
+    WebPetConfig next = {};
+    next.assigned = true;
+    sanitize_string_copy(next.id, PET_ID_LEN, id);
+    sanitize_string_copy(next.slug, PET_SLUG_LEN, slug);
+    sanitize_string_copy(next.display_name, PET_NAME_LEN, display_name);
+    sanitize_string_copy(next.spritesheet_path, PET_PATH_LEN, spritesheet_path);
+    sanitize_string_copy(next.pet_json_path, PET_PATH_LEN, pet_json_path);
+    sanitize_string_copy(next.dominant_color, PET_COLOR_LEN, dominant_color);
+    sanitize_string_copy(next.preview_image_path, PET_PATH_LEN, preview_image_path);
+    *out_pet = next;
+    return true;
+}
+
+static bool apply_config_json(JsonVariantConst input, bool allow_partial_pets, String* error) {
+    if (!input.is<JsonObjectConst>()) {
+        if (error) *error = "Config must be an object";
+        return false;
+    }
+
+    JsonObjectConst doc = input.as<JsonObjectConst>();
+    if (!doc["claude"].is<bool>() || !doc["codex"].is<bool>() || !doc["selected_provider"].is<const char*>()) {
+        if (error) *error = "Expected claude, codex, and selected_provider";
+        return false;
+    }
+
+    bool next_claude_visible = doc["claude"].as<bool>();
+    bool next_codex_visible = doc["codex"].as<bool>();
+    web_provider_t next_selected_provider = normalize_selected_provider(
+        next_claude_visible,
+        next_codex_visible,
+        provider_from_name(doc["selected_provider"].as<const char*>())
+    );
+
+    JsonVariantConst pets = doc["pets"];
+    if (!pets.isNull()) {
+        if (!pets.is<JsonObjectConst>()) {
+            if (error) *error = "pets must be an object";
+            return false;
+        }
+        for (JsonPairConst kv : pets.as<JsonObjectConst>()) {
+            const char* pname = kv.key().c_str();
+            if (!pname || !pname[0]) continue;
+            WebPetConfig* slot = get_or_create_pet_slot(pname);
+            if (slot) {
+                String pet_error;
+                parse_pet_config(kv.value(), slot, &pet_error);
+            }
+        }
+    }
+
+    g_claude_visible = next_claude_visible;
+    g_codex_visible  = next_codex_visible;
+    g_selected_provider = next_selected_provider;
+
+    const char* sel_ext = doc["selected_provider_ext"] | "";
+    if (sel_ext && sel_ext[0] != '\0') {
+        strlcpy(g_selected_provider_name, sel_ext, PROVIDER_NAME_LEN);
+        if (strcmp(sel_ext, "codex") == 0) g_selected_provider = WEB_PROVIDER_CODEX;
+        else if (strcmp(sel_ext, "claude") == 0) g_selected_provider = WEB_PROVIDER_CLAUDE;
+    } else {
+        strlcpy(g_selected_provider_name, provider_name(next_selected_provider), PROVIDER_NAME_LEN);
+    }
+
+    JsonVariantConst extra_vis = doc["provider_visibility"];
+    if (!extra_vis.isNull() && extra_vis.is<JsonObjectConst>()) {
+        for (JsonPairConst kv : extra_vis.as<JsonObjectConst>()) {
+            if (kv.value().is<bool>()) {
+                extra_config_set_visible(kv.key().c_str(), kv.value().as<bool>());
+            }
+        }
+    }
+
+    // Only update splash pin when field is explicitly present;
+    // absent means "don't touch it" (managed by /api/splash endpoint).
+    if (doc["splash_pin"].is<const char*>()) {
+        strlcpy(g_splash_pin, doc["splash_pin"].as<const char*>(), sizeof(g_splash_pin));
+    }
+
+    return true;
+}
+
+static void load_config_state() {
+    clear_pet_config(&g_pet_configs[0]);
+    clear_pet_config(&g_pet_configs[1]);
+    g_claude_visible = true;
+    g_codex_visible = true;
+    g_selected_provider = WEB_PROVIDER_CLAUDE;
+    g_splash_pin[0] = '\0';
+
+    if (!prefs.begin(kPrefsNamespace, true)) {
+        Serial.println("Config load skipped: prefs begin");
+        return;
+    }
+
+    String saved = prefs.getString(kPrefsStateKey, "");
+    prefs.end();
+    if (saved.isEmpty()) return;
+
+    JsonDocument doc;
+    if (deserializeJson(doc, saved) != DeserializationError::Ok) {
+        Serial.println("Config load skipped: invalid JSON");
+        return;
+    }
+
+    String error;
+    if (!apply_config_json(doc.as<JsonVariantConst>(), true, &error)) {
+        Serial.printf("Config load skipped: %s\n", error.c_str());
+    }
+}
+
 bool web_server_claude_visible(void) { return g_claude_visible; }
 bool web_server_codex_visible(void)  { return g_codex_visible; }
 web_provider_t web_server_selected_provider(void) { return g_selected_provider; }
+const WebPetConfig* web_server_pet_config(web_provider_t provider) { return pet_config_for_const(provider); }
 
-static void append_config_script(String& html) {
-    html += "<script>(function(){";
-    html += "let inFlight=false;let queued=false;";
-    html += "let lastAck={claude:";
-    html += g_claude_visible ? "true" : "false";
-    html += ",codex:";
-    html += g_codex_visible ? "true" : "false";
-    html += ",selected_provider:'";
-    html += provider_name(g_selected_provider);
-    html += "'};";
-    html += "function boxes(){return{claude:document.getElementById('cfg-claude'),codex:document.getElementById('cfg-codex')}}";
-    html += "function radios(){return{claude:document.getElementById('sel-claude'),codex:document.getElementById('sel-codex')}}";
-    html += "function normalize(cfg,changed){const state={claude:!!cfg.claude,codex:!!cfg.codex,selected_provider:cfg.selected_provider==='codex'?'codex':'claude'};if(changed&&(changed==='claude'||changed==='codex')&&state[changed])state.selected_provider=changed;if(!state[state.selected_provider]){if(state.claude)state.selected_provider='claude';else if(state.codex)state.selected_provider='codex';}return state;}";
-    html += "function snapshot(changed){const b=boxes(),r=radios();const selected=r.codex&&r.codex.checked?'codex':'claude';return normalize({claude:!!(b.claude&&b.claude.checked),codex:!!(b.codex&&b.codex.checked),selected_provider:selected},changed)}";
-    html += "function sync(cfg){const state=normalize(cfg);const b=boxes(),r=radios();if(b.claude)b.claude.checked=state.claude;if(b.codex)b.codex.checked=state.codex;if(r.claude)r.claude.checked=state.selected_provider==='claude';if(r.codex)r.codex.checked=state.selected_provider==='codex';}";
-    html += "async function flush(changed){if(inFlight){queued=changed||true;return;}inFlight=true;const pending=changed||'';queued=false;";
-    html += "try{const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(snapshot(pending))});";
-    html += "if(!r.ok)throw new Error('config');const cfg=await r.json();if(typeof cfg.claude!=='boolean'||typeof cfg.codex!=='boolean'||(cfg.selected_provider!=='claude'&&cfg.selected_provider!=='codex'))throw new Error('payload');lastAck=cfg;sync(cfg);}catch(_e){sync(lastAck);}finally{const rerun=queued;queued=false;inFlight=false;if(rerun)flush(typeof rerun==='string'?rerun:'');}}";
-    html += "window.cfgChanged=function(provider){flush(provider||'');};window.cfgSelect=function(provider){const b=boxes(),r=radios();if(b[provider])b[provider].checked=true;if(r[provider])r[provider].checked=true;flush(provider);};window.syncConfig=sync;";
-    html += "})();</script>";
+const char* web_server_selected_provider_name(void) {
+    return g_selected_provider_name;
+}
+
+bool web_server_provider_visible(const char* name) {
+    if (!name) return true;
+    if (strcmp(name, "claude") == 0) return g_claude_visible;
+    if (strcmp(name, "codex")  == 0) return g_codex_visible;
+    for (int i = 0; i < g_extra_config_count; ++i) {
+        if (strcmp(g_extra_configs[i].name, name) == 0)
+            return g_extra_configs[i].visible;
+    }
+    return true;
+}
+
+static void extra_config_set_visible(const char* name, bool visible) {
+    for (int i = 0; i < g_extra_config_count; ++i) {
+        if (strcmp(g_extra_configs[i].name, name) == 0) {
+            g_extra_configs[i].visible = visible;
+            return;
+        }
+    }
+    if (g_extra_config_count < MAX_PROVIDERS) {
+        strlcpy(g_extra_configs[g_extra_config_count].name, name, PROVIDER_NAME_LEN);
+        g_extra_configs[g_extra_config_count].visible = visible;
+        g_extra_config_count++;
+    }
+}
+
+static void extra_config_ensure(const char* name) {
+    if (!name || strcmp(name, "claude") == 0 || strcmp(name, "codex") == 0) return;
+    for (int i = 0; i < g_extra_config_count; ++i) {
+        if (strcmp(g_extra_configs[i].name, name) == 0) return;
+    }
+    if (g_extra_config_count < MAX_PROVIDERS) {
+        strlcpy(g_extra_configs[g_extra_config_count].name, name, PROVIDER_NAME_LEN);
+        g_extra_configs[g_extra_config_count].visible = true;
+        g_extra_config_count++;
+    }
 }
 
 static void send_config_response() {
     JsonDocument response;
-    response["claude"] = g_claude_visible;
-    response["codex"] = g_codex_visible;
-    response["selected_provider"] = provider_name(g_selected_provider);
+    write_config_json(response.to<JsonObject>());
 
     String body;
     serializeJson(response, body);
@@ -79,206 +392,11 @@ static void send_config_response() {
 }
 
 static const ProviderData* find_provider(const char* name) {
-    for (int i = 0; i < last_data.provider_count && i < 2; ++i) {
-        if (strcmp(last_data.providers[i].name, name) == 0) {
+    for (int i = 0; i < last_data.provider_count && i < MAX_PROVIDERS; ++i) {
+        if (strcmp(last_data.providers[i].name, name) == 0)
             return &last_data.providers[i];
-        }
     }
     return nullptr;
-}
-
-static String make_bar_html(float pct) {
-    const char* col = pct >= 80.0f ? "#c0392b" : (pct >= 50.0f ? "#d97757" : "#788c5d");
-    String bar = "<div style='background:#2a2a28;border-radius:4px;height:8px;margin:6px 0'>";
-    bar += "<div style='background:";
-    bar += col;
-    bar += ";height:8px;border-radius:4px;width:";
-    bar += String((int)pct);
-    bar += "%'></div></div>";
-    return bar;
-}
-
-static String make_provider_card(const char* name, const char* color,
-                                 const char* icon, const ProviderData* pd) {
-    String html;
-    html.reserve(800);
-    bool ok = pd && pd->ok;
-
-    html += "<div class='card' style='border-left:3px solid ";
-    html += ok ? color : "#3a3a38";
-    html += "'>";
-
-    // Header row: icon + name + status dot
-    html += "<div style='display:flex;align-items:center;justify-content:space-between;margin-bottom:12px'>";
-    html += "<div style='display:flex;align-items:center;gap:8px'>";
-    html += "<span style='font-size:20px'>";
-    html += icon;
-    html += "</span>";
-    html += "<span style='font-size:16px;font-weight:700;color:";
-    html += color;
-    html += "'>";
-    html += name;
-    html += "</span>";
-    html += "</div>";
-    if (ok) {
-        html += "<span style='background:";
-        html += color;
-        html += ";color:#000;font-size:11px;font-weight:600;padding:2px 8px;border-radius:20px'>Connected</span>";
-    } else {
-        html += "<span style='background:#2a2a28;color:#b0aea5;font-size:11px;padding:2px 8px;border-radius:20px'>Not configured</span>";
-    }
-    html += "</div>";
-
-    if (ok) {
-        if (strlen(pd->plan_type) > 0) {
-            html += "<div class='row'><span class='label'>Plan</span><span class='value'>";
-            html += pd->plan_type;
-            html += "</span></div>";
-        }
-        html += "<div class='row'><span class='label'>Session</span><span class='value'>";
-        html += String(pd->session_pct, 1);
-        html += "%</span></div>";
-        html += make_bar_html(pd->session_pct);
-        html += "<div class='row'><span class='label'>Weekly</span><span class='value'>";
-        html += String(pd->weekly_pct, 1);
-        html += "%</span></div>";
-        html += make_bar_html(pd->weekly_pct);
-        if (pd->has_credits) {
-            html += "<div class='row'><span class='label'>Credits</span><span class='value'>$";
-            html += String(pd->credits_balance, 2);
-            html += "</span></div>";
-        }
-        if (pd->simulated) {
-            html += "<div style='margin-top:8px;font-size:11px;color:#b0aea5'>&#9888; Simulated data (token may be expired)</div>";
-        }
-    } else {
-        const char* cmd = (strcmp(name, "Claude") == 0) ? "claude" : "codex";
-        html += "<div style='padding:8px 0;color:#b0aea5;font-size:13px'>";
-        if (pd && strlen(pd->error) > 0) {
-            html += pd->error;
-        } else {
-            html += "No data received from daemon.";
-        }
-        html += "</div>";
-        html += "<div style='margin-top:8px;background:#0a0a0a;border-radius:6px;padding:8px;font-family:monospace;font-size:12px;color:#788c5d'>";
-        html += cmd;
-        html += " login";
-        html += "</div>";
-    }
-
-    html += "</div>";
-    return html;
-}
-
-// Build HTML dashboard dynamically in RAM (no PROGMEM to avoid LoadProhibited)
-static String build_dashboard() {
-    String html;
-    html.reserve(4000);
-
-    bool conn = wifi_is_connected();
-
-    html += "<!DOCTYPE html><html><head>";
-    html += "<meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>";
-    html += "<title>PocketMeter</title>";
-    html += "<meta http-equiv='refresh' content='10'>";
-    html += "<style>";
-    html += "body{background:#0a0a0a;color:#faf9f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;margin:0;padding:20px;max-width:480px;margin-left:auto;margin-right:auto}";
-    html += "h1{font-size:20px;font-weight:700;margin:0 0 4px 0;color:#faf9f5}";
-    html += ".subtitle{font-size:13px;color:#b0aea5;margin-bottom:20px}";
-    html += ".card{background:#1f1f1e;border-radius:12px;padding:16px;margin-bottom:14px}";
-    html += ".card h2{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:#b0aea5;margin:0 0 10px 0}";
-    html += ".row{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid #2a2a28}";
-    html += ".row:last-child{border-bottom:none}";
-    html += ".label{color:#b0aea5;font-size:13px}";
-    html += ".value{font-weight:500;font-size:13px}";
-    html += ".pill{display:inline-block;background:#2a2a28;border-radius:4px;padding:1px 7px;font-size:11px;font-family:monospace}";
-    html += ".footer{text-align:center;color:#444;font-size:11px;margin-top:20px}";
-    html += "</style></head><body>";
-
-    // Header
-    html += "<h1>PocketMeter</h1>";
-    html += "<div class='subtitle'>AI Usage Monitor";
-    if (last_data_time > 0) {
-        html += " &middot; Updated ";
-        html += String((millis() - last_data_time) / 1000);
-        html += "s ago";
-    }
-    html += "</div>";
-
-    // WiFi status (compact)
-    html += "<div class='card'><h2>Network</h2>";
-    html += "<div class='row'><span class='label'>WiFi</span><span class='value' style='color:";
-    html += conn ? "#788c5d" : "#c0392b";
-    html += "'>";
-    html += conn ? "Connected" : "Disconnected";
-    html += "</span></div>";
-    if (conn) {
-        html += "<div class='row'><span class='label'>SSID</span><span class='value'>";
-        html += wifi_get_ssid();
-        html += "</span></div>";
-        html += "<div class='row'><span class='label'>IP</span><span class='value pill'>";
-        html += wifi_get_ip();
-        html += "</span></div>";
-        html += "<div class='row'><span class='label'>Signal</span><span class='value'>";
-        html += String(wifi_get_rssi());
-        html += " dBm</span></div>";
-    }
-    html += "</div>";
-
-    // Provider cards
-    const ProviderData* claude = find_provider("claude");
-    html += make_provider_card("Claude", "#d97757", "&#129302;", claude);
-
-    const ProviderData* codex = find_provider("codex");
-    html += make_provider_card("Codex", "#10a37f", "&#9729;", codex);
-
-    // Display visibility toggles
-    html += "<div class='card'><h2>Display</h2>";
-    html += "<style>.trow{display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid #2a2a28}.trow:last-child{border-bottom:none}";
-    html += ".sw{position:relative;display:inline-block;width:44px;height:24px}";
-    html += ".sw input{opacity:0;width:0;height:0}";
-    html += ".sl{position:absolute;cursor:pointer;inset:0;background:#2a2a28;border-radius:24px;transition:.2s}";
-    html += ".sl:before{position:absolute;content:'';height:18px;width:18px;left:3px;bottom:3px;background:#b0aea5;border-radius:50%;transition:.2s}";
-    html += "input:checked+.sl{background:#788c5d}input:checked+.sl:before{transform:translateX(20px);background:#faf9f5}";
-    html += ".seg{display:flex;gap:8px}.seg label{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;background:#2a2a28;color:#faf9f5;font-size:12px}.seg input{accent-color:#788c5d}</style>";
-    append_config_script(html);
-    html += "<div style='font-size:12px;color:#b0aea5;margin-bottom:10px'>Visibility controls the mascot; active usage chooses which provider screen opens immediately.</div>";
-    html += "<div class='trow'><span class='label' style='color:#d97757'>&#129302; Claude mascot</span>";
-    html += "<label class='sw'><input id='cfg-claude' type='checkbox'";
-    html += g_claude_visible ? " checked" : "";
-    html += " onchange=\"cfgChanged('claude')\"><span class='sl'></span></label></div>";
-    html += "<div class='trow'><span class='label' style='color:#10a37f'>&#9729; Codex mascot</span>";
-    html += "<label class='sw'><input id='cfg-codex' type='checkbox'";
-    html += g_codex_visible ? " checked" : "";
-    html += " onchange=\"cfgChanged('codex')\"><span class='sl'></span></label></div>";
-    html += "<div class='trow'><span class='label'>Active usage</span><div class='seg'>";
-    html += "<label><input id='sel-claude' type='radio' name='selected-provider' value='claude'";
-    html += g_selected_provider == WEB_PROVIDER_CLAUDE ? " checked" : "";
-    html += " onchange=\"cfgSelect('claude')\">Claude</label>";
-    html += "<label><input id='sel-codex' type='radio' name='selected-provider' value='codex'";
-    html += g_selected_provider == WEB_PROVIDER_CODEX ? " checked" : "";
-    html += " onchange=\"cfgSelect('codex')\">Codex</label></div></div>";
-    html += "</div>";
-
-    // Device info
-    html += "<div class='card'><h2>Device</h2>";
-    html += "<div class='row'><span class='label'>Uptime</span><span class='value'>";
-    html += String(millis() / 1000);
-    html += "s</span></div>";
-    html += "<div class='row'><span class='label'>Providers</span><span class='value'>";
-    html += String(last_data.provider_count);
-    html += " active</span></div>";
-    html += "</div>";
-
-    html += "<div class='footer'>PocketMeter &middot; Auto-refresh 10s</div>";
-    html += "</body></html>";
-
-    return html;
-}
-
-static void handle_root() {
-    String html = build_dashboard();
-    server.send(200, "text/html", html);
 }
 
 static void handle_usage() {
@@ -287,7 +405,6 @@ static void handle_usage() {
         return;
     }
     
-    // Read raw body from the client
     String body = "";
     if (server.hasArg("plain")) {
         body = server.arg("plain");
@@ -313,17 +430,15 @@ static void handle_status() {
     JsonDocument doc;
     doc["wifi_connected"] = wifi_is_connected();
     doc["ssid"] = wifi_get_ssid();
+    doc["hostname"] = wifi_get_hostname();
     doc["ip"] = wifi_get_ip();
     doc["rssi"] = wifi_get_rssi();
     doc["uptime_ms"] = millis();
     doc["has_data"] = last_data_time > 0 && last_data.provider_count > 0;
     doc["provider_count"] = last_data.provider_count;
-    JsonObject config = doc["config"].to<JsonObject>();
-    config["claude"] = g_claude_visible;
-    config["codex"] = g_codex_visible;
-    config["selected_provider"] = provider_name(g_selected_provider);
+    write_config_json(doc["config"].to<JsonObject>());
     JsonArray providers = doc["providers"].to<JsonArray>();
-    for (int i = 0; i < last_data.provider_count && i < 2; ++i) {
+    for (int i = 0; i < last_data.provider_count && i < MAX_PROVIDERS; ++i) {
         JsonObject p = providers.add<JsonObject>();
         const ProviderData* pd = &last_data.providers[i];
         p["provider"] = pd->name;
@@ -333,8 +448,11 @@ static void handle_status() {
         p["plan_type"] = pd->plan_type;
         p["credits_balance"] = pd->credits_balance;
         p["has_credits"] = pd->has_credits;
+        p["metrics_available"] = pd->metrics_available;
         p["simulated"] = pd->simulated;
+        p["configured"] = pd->configured;
         p["ok"] = pd->ok;
+        p["note"] = pd->note;
         p["error"] = pd->error;
     }
     
@@ -368,27 +486,125 @@ static void handle_config() {
         return;
     }
 
-    if (!doc["claude"].is<bool>() || !doc["codex"].is<bool>() || !doc["selected_provider"].is<const char*>()) {
-        server.send(400, "text/plain", "Expected full config state");
+    String error;
+    if (!apply_config_json(doc.as<JsonVariantConst>(), true, &error)) {
+        server.send(400, "text/plain", error);
         return;
     }
 
-    g_claude_visible = doc["claude"].as<bool>();
-    g_codex_visible  = doc["codex"].as<bool>();
-    g_selected_provider = normalize_selected_provider(
-        g_claude_visible,
-        g_codex_visible,
-        provider_from_name(doc["selected_provider"].as<const char*>())
-    );
+    save_config_state();
     send_config_response();
 }
 
+static void handle_splash_get() {
+    JsonDocument doc;
+    doc["pinned"] = g_splash_pin;
+    JsonArray anims = doc["animations"].to<JsonArray>();
+    int count = splash_anim_count();
+    for (int i = 0; i < count; i++) {
+        JsonObject a = anims.add<JsonObject>();
+        a["name"]     = splash_anim_name(i);
+        a["category"] = splash_anim_category(i);
+    }
+    String body;
+    serializeJson(doc, body);
+    server.send(200, "application/json", body);
+}
+
+static void handle_splash_post() {
+    String body = server.hasArg("plain") ? server.arg("plain") : server.arg(0);
+    if (body.length() == 0) { server.send(400, "text/plain", "Bad Request"); return; }
+    JsonDocument doc;
+    if (deserializeJson(doc, body) != DeserializationError::Ok) {
+        server.send(400, "text/plain", "Bad JSON"); return;
+    }
+    const char* name = doc["name"] | "";
+    strlcpy(g_splash_pin, name, sizeof(g_splash_pin));
+    splash_pin_by_name(name);   // apply immediately
+    save_config_state();
+    JsonDocument resp;
+    resp["ok"] = true;
+    resp["pinned"] = g_splash_pin;
+    String respBody;
+    serializeJson(resp, respBody);
+    server.send(200, "application/json", respBody);
+}
+
+const char* web_server_splash_pin(void) { return g_splash_pin; }
+void web_server_clear_splash_pin(void) { g_splash_pin[0] = '\0'; }
+
+static void handle_anim_custom() {
+    String body = server.hasArg("plain") ? server.arg("plain") : server.arg(0);
+    if (body.length() == 0 || body.length() >= sizeof(custom_anim_buf)) {
+        server.send(400, "text/plain", "Bad Request");
+        return;
+    }
+    memcpy(custom_anim_buf, body.c_str(), body.length() + 1);
+
+    JsonDocument doc;
+    if (deserializeJson(doc, custom_anim_buf) != DeserializationError::Ok) {
+        server.send(400, "text/plain", "Bad JSON");
+        return;
+    }
+
+    const char* name       = doc["name"]        | "";
+    const char* cat        = doc["category"]    | "petdex";
+    const char* provider   = doc["provider"]    | "claude";
+    const char* frames_str = doc["frames"]      | "";
+    uint16_t    fc         = doc["frame_count"] | (uint16_t)0;
+
+    if (!name[0] || !frames_str[0] || fc == 0 || fc > 8) {
+        server.send(400, "text/plain", "Missing or invalid fields");
+        return;
+    }
+
+    uint16_t pal[10] = {};
+    JsonArrayConst pal_arr = doc["palette"].as<JsonArrayConst>();
+    for (int i = 0; i < 10 && i < (int)pal_arr.size(); i++)
+        pal[i] = (uint16_t)pal_arr[i].as<unsigned int>();
+
+    uint16_t holds[8] = {};
+    JsonArrayConst holds_arr = doc["holds"].as<JsonArrayConst>();
+    bool has_holds = !holds_arr.isNull() && (int)holds_arr.size() > 0;
+    if (has_holds)
+        for (int i = 0; i < (int)fc && i < (int)holds_arr.size(); i++)
+            holds[i] = (uint16_t)holds_arr[i].as<unsigned int>();
+
+    if (!splash_set_custom(name, cat, provider, pal, frames_str, fc, has_holds ? holds : nullptr)) {
+        server.send(500, "text/plain", "Conversion failed");
+        return;
+    }
+
+    // Only the Claude splash uses the pin system; Codex uses s_codex_valid directly.
+    if (strcmp(provider, "claude") == 0) {
+        strlcpy(g_splash_pin, name, sizeof(g_splash_pin));
+        splash_pin_by_name(name);   // apply immediately
+    }
+    save_config_state();
+
+    JsonDocument resp;
+    resp["ok"]   = true;
+    resp["name"] = name;
+    String respBody;
+    serializeJson(resp, respBody);
+    server.send(200, "application/json", respBody);
+}
+
+static void handle_root() {
+    // The web UI is now served by the PC. ESP32 only exposes REST API.
+    server.send(200, "text/plain", "PocketMeter API. Use the web UI on your PC.");
+}
+
 void web_server_init() {
+    load_config_state();
     server.on("/", HTTP_GET, handle_root);
     server.on(DATA_ENDPOINT, HTTP_POST, handle_usage);
     server.on(STATUS_ENDPOINT, HTTP_GET, handle_status);
     server.on("/api/health", HTTP_GET, handle_health);
-    server.on("/api/config", HTTP_POST, handle_config);
+    server.on(CONFIG_ENDPOINT, HTTP_POST, handle_config);
+    server.on("/api/splash", HTTP_GET, handle_splash_get);
+    server.on("/api/splash", HTTP_POST, handle_splash_post);
+    server.on("/api/anim/custom", HTTP_POST, handle_anim_custom);
     
     server.begin();
     Serial.printf("Web server started on port %d\n", WEB_SERVER_PORT);
@@ -412,8 +628,9 @@ void web_server_clear_data() {
 }
 
 void web_server_set_last_data(const UsageData* data) {
-    if (data) {
-        last_data = *data;
-        last_data_time = millis();
-    }
+    if (!data) return;
+    last_data      = *data;
+    last_data_time = millis();
+    for (int i = 0; i < data->provider_count && i < MAX_PROVIDERS; ++i)
+        extra_config_ensure(data->providers[i].name);
 }

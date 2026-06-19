@@ -1,192 +1,98 @@
-# PocketMeter WiFi + HTTP - Guía de instalación
+# PocketMeter — Web UI Setup
 
-Esta guía deja PocketMeter funcionando con el flujo actual: firmware en la ESP32, daemon Python en el PC y panel web servido por la propia placa. El transporte principal de métricas ya no es BLE, sino **WiFi + HTTP**.
+> **Changed from README**: The web panel is no longer served by the ESP32.  
+> It now runs on your PC at `http://localhost:8080`.
 
-## Requisitos previos
-
-- Tener la Waveshare ESP32-S3 AMOLED 2.16 conectada al PC por USB
-- Tener instalado PlatformIO
-- Conocer tu red WiFi y contraseña
-- Tener `python3` disponible en el PC que ejecutará el daemon
-
-## Instalación de PlatformIO
+## Quick start
 
 ```bash
-# Crear entorno virtual e instalar
-python3 -m venv /tmp/pio-venv
-/tmp/pio-venv/bin/pip install -U platformio
+cd daemon
+./web-server.sh          # foreground
+./web-server.sh --daemon # background (logs → daemon/web-server.log)
 ```
 
-## Configuración del WiFi
+Open **http://localhost:8080** in your browser.
 
-Edita `firmware/src/config.h` y cambia estas líneas:
+## Architecture
 
-```cpp
-#define WIFI_SSID "TuRedWiFi"
-#define WIFI_PASSWORD "TuPassword"
+```
+PC (localhost:8080)
+├── web-server.py     Python HTTP server — serves UI, proxies ESP32, stores API keys
+├── index.html        Single-page dashboard (live polling, no page blink)
+└── /api/petdex/search → HTTPS direct to petdex.crafter.run
+
+       │ HTTP proxy
+       ▼
+
+ESP32 (192.168.1.180 / pocketmeter.local)
+├── /api/status   → WiFi, providers, config, pets
+├── /api/config   → POST — mascot toggles, active display, pet assignments
+└── /api/usage    → POST — daemon posts provider usage data here
 ```
 
-Pon ahí tus credenciales reales antes de compilar.
+## Environment variables for web-server.py
 
-## Compilar el firmware
+| Variable | Default | Description |
+|---|---|---|
+| `ESP32_HOST` | `192.168.1.180` | ESP32 IP or hostname |
+| `ESP32_PORT` | `80` | ESP32 HTTP port |
+| `POCKETMETER_WEB_PORT` | `8080` | Local port for the web server |
+
+## Running the daemon
 
 ```bash
-cd /media/edu/trabajo/Aplica/Clawdmeter/firmware
-/tmp/pio-venv/bin/pio run
+python3 daemon/pocketmeter-daemon.py
 ```
 
-La primera compilación tarda más porque descarga dependencias.
+The daemon discovers the ESP32 automatically (mDNS → subnet scan → cached IP file).
 
-## Flashear a la ESP32-S3
+## Providers (10 total)
+
+### OAuth providers — configure via CLI
+
+The web UI shows the exact command to run. After running it, restart the daemon.
+
+| Provider | Command |
+|---|---|
+| Claude | `claude login` |
+| Codex | `codex login` |
+| Gemini | `gemini` (first run triggers browser OAuth) |
+| Copilot | `gh auth login --scopes copilot` |
+| Grok | `grok` |
+
+### API key providers — configure via web UI or env var
+
+Open **http://localhost:8080**, find the provider card, paste the key, click **Save**.  
+Keys are stored in `~/.config/pocketmeter/api-keys.json` and read on the next daemon poll.
+
+Alternatively, set the environment variable before starting the daemon:
+
+| Provider | Env var | Notes |
+|---|---|---|
+| OpenAI | `OPENAI_API_KEY` | Admin key needed for org cost API |
+| DeepSeek | `DEEPSEEK_API_KEY` | Shows balance |
+| Kimi (Moonshot) | `KIMI_API_KEY` | platform.moonshot.cn |
+| Cursor | `CURSOR_SESSION_TOKEN` | WorkosCursorSessionToken cookie from cursor.com |
+
+### Windsurf
+
+Install [Windsurf](https://windsurf.com). The daemon reads plan data from its local SQLite database automatically — no configuration needed.
+
+## systemd auto-start
 
 ```bash
-/tmp/pio-venv/bin/pio run -t upload --upload-port /dev/ttyACM0
+cp daemon/pocketmeter-web.service ~/.config/systemd/user/
+# Edit ExecStart path if needed
+systemctl --user enable --now pocketmeter-web
 ```
 
-Si no está en `/dev/ttyACM0`, búscala con:
+## What changed from the old setup
 
-```bash
-ls /dev/ttyACM* /dev/ttyUSB*
-```
-
-## Ver la IP de la ESP32
-
-Abre el monitor serie:
-
-```bash
-/tmp/pio-venv/bin/pio device monitor --port /dev/ttyACM0
-```
-
-Busca la línea donde aparezca la IP del dispositivo:
-
-```text
-WiFi IP: 192.168.1.XXX
-```
-
-## Configurar la IP para el daemon
-
-Guarda la IP en el fichero que usa el daemon:
-
-```bash
-mkdir -p ~/.config/claude-usage-monitor
-printf '192.168.1.169\n' > ~/.config/claude-usage-monitor/esp-ip
-```
-
-La IP puede cambiar si tu router reasigna DHCP.
-
-## Ejecutar el daemon actual
-
-El daemon principal hoy es el script Python multi-provider:
-
-```bash
-cd /media/edu/trabajo/Aplica/Clawdmeter
-python3 daemon/clawdmeter-daemon.py
-```
-
-Comportamiento esperado:
-
-- **Claude** funciona si existe `~/.claude/.credentials.json`
-- **Codex** saldrá como **Not configured** hasta ejecutar `codex login`
-- Si luego configuras Codex, reinicia el daemon para que vuelva a comprobar credenciales
-
-Para que Codex deje de salir como no configurado:
-
-```bash
-codex login
-python3 daemon/clawdmeter-daemon.py
-```
-
-### Opción opcional: demo con datos simulados
-
-Si solo quieres probar el flujo end-to-end:
-
-```bash
-cd /media/edu/trabajo/Aplica/Clawdmeter
-./daemon/claude-usage-wifi-demo.sh
-```
-
-## Ver el panel web
-
-Abre en tu navegador:
-
-```text
-http://192.168.1.169/
-```
-
-Verás un panel con:
-
-- Estado de conexión WiFi
-- Últimas métricas recibidas de Claude/Codex
-- Uptime del dispositivo
-
-Se actualiza automáticamente cada 5 segundos.
-
-## Probar manualmente (sin daemon)
-
-```bash
-curl -X POST http://192.168.1.169/api/usage \
-  -H "Content-Type: application/json" \
-  -d '{"s":45,"sr":120,"w":28,"wr":7200,"st":"allowed","ok":true}'
-
-curl http://192.168.1.169/api/status
-curl http://192.168.1.169/api/health
-```
-
-## Funcionamiento de botones físicos
-
-Los botones físicos siguen usando BLE HID para atajos del host:
-
-- **Izquierdo (GPIO 0)**: mantiene pulsado para enviar Space
-- **Derecho (GPIO 18)**: envía Shift+Tab
-- **Central (PWR)**: cambia entre pantallas (Splash ↔ Usage ↔ Network)
-
-## Solución de problemas
-
-### No se conecta al WiFi
-
-- Verifica que las credenciales en `config.h` sean correctas
-- Asegúrate de que es una red 2.4GHz
-- Revisa el monitor serie para ver errores
-
-### El daemon no encuentra la IP
-
-- Verifica que existe `~/.config/claude-usage-monitor/esp-ip`
-- Comprueba que puedes hacer ping a la IP de la ESP32
-
-### No se muestran datos en la pantalla
-
-- Verifica que el daemon está ejecutándose
-- Prueba el envío manual con `curl`
-- Revisa la salida del daemon
-
-### La compilación falla
-
-- Asegúrate de usar una versión reciente de PlatformIO
-- Borra `.pio/build` y recompila
-
-## Archivos clave
-
-```text
-Clawdmeter/
-├── firmware/
-│   ├── src/
-│   │   ├── config.h              # Credenciales WiFi
-│   │   ├── wifi_manager.h/cpp    # Gestión WiFi
-│   │   ├── web_server.h/cpp      # Servidor HTTP y panel web
-│   │   ├── main.cpp              # Inicializa WiFi + web
-│   │   ├── ui.h/cpp              # UI en pantalla
-│   │   └── ble.h/cpp             # BLE HID para botones físicos
-│   └── platformio.ini            # Configuración de build
-└── daemon/
-    ├── clawdmeter-daemon.py      # Daemon principal actual (Claude + Codex)
-    ├── claude-usage-wifi.sh      # Script WiFi antiguo / alternativo
-    └── claude-usage-wifi-demo.sh # Demo con datos simulados
-```
-
-## Notas
-
-- Las credenciales WiFi siguen hardcodeadas en `firmware/src/config.h`
-- El panel web es sencillo, pero útil para comprobar IP, señal y estado de providers
-- El BLE HID sigue funcionando para los botones físicos
-- Si cambias de red WiFi, debes recompilar y reflashear
-- La carpeta local puede seguir llamándose `Clawdmeter`, aunque el branding visible sea **PocketMeter**
+| Before | Now |
+|---|---|
+| Web panel served by ESP32 | Web panel served by PC at localhost:8080 |
+| ESP32 needed HTTPS for Petdex | PC makes HTTPS calls directly |
+| Auto-refresh every 30s (page blink) | Smooth background polling, DOM updates only |
+| Only Claude + Codex in UI | 10 providers: + Gemini, Copilot, Grok, OpenAI, DeepSeek, Windsurf, Cursor, Kimi |
+| API keys only via env vars | API keys saveable via web UI |
+| Pet assignment broken for non-Claude providers | Pet assignment works for all providers |

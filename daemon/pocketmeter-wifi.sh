@@ -1,9 +1,10 @@
 #!/bin/bash
-# Claude Usage Tracker Daemon (WiFi)
+# PocketMeter Daemon (WiFi)
 # Reads Claude Code OAuth token, polls usage via API, sends to ESP32 over HTTP.
 # Dependencies: curl
 
-DEVICE_IP_FILE="$HOME/.config/claude-usage-monitor/esp-ip"
+DEVICE_IP_FILE="$HOME/.config/pocketmeter/esp-ip"
+LEGACY_DEVICE_IP_FILE="$HOME/.config/claude-usage-monitor/esp-ip"
 POLL_INTERVAL=60
 TICK=5
 
@@ -17,12 +18,14 @@ read_token() {
 
 # Load saved IP
 load_ip() {
-    if [ -f "$DEVICE_IP_FILE" ]; then
-        DEVICE_IP=$(head -1 "$DEVICE_IP_FILE" | tr -d '\r\n ')
-        if [ -n "$DEVICE_IP" ]; then
-            return 0
+    for cache_file in "$DEVICE_IP_FILE" "$LEGACY_DEVICE_IP_FILE"; do
+        if [ -f "$cache_file" ]; then
+            DEVICE_IP=$(head -1 "$cache_file" | tr -d '\r\n ')
+            if [ -n "$DEVICE_IP" ]; then
+                return 0
+            fi
         fi
-    fi
+    done
     return 1
 }
 
@@ -78,7 +81,7 @@ poll() {
     return 0
 }
 
-log "=== Claude Usage Tracker Daemon (WiFi) ==="
+log "=== PocketMeter Daemon (WiFi) ==="
 log "Poll interval: ${POLL_INTERVAL}s"
 
 BACKOFF=1

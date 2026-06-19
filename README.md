@@ -80,6 +80,79 @@ Este es el camino feliz para levantar el proyecto desde cero.
 
 No hay `requirements.txt` en el repo en este momento. La ruta principal del daemon usa librería estándar de Python; Pillow solo es necesario para convertir sprites de PetDex.
 
+## Instalar PlatformIO
+
+PlatformIO (pio) es necesario para compilar y flashear el firmware. Se instala igual en cualquier sistema.
+
+### Opción recomendada: pip (macOS / Linux / Windows)
+
+```bash
+pip install platformio
+```
+
+Si tu usuario no tiene permisos globales de pip, usa `--user`:
+
+```bash
+pip install --user platformio
+```
+
+En **Windows**, asegúrate de que `%APPDATA%\Python\Scripts` o la ruta de `--user` esté en el `PATH`. Si instalaste Python desde la Microsoft Store, pip suele quedar en `%USERPROFILE%\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.x\LocalCache\local-packages\Python3x\Scripts`.
+
+En **macOS / Linux**, con `--user` el binario queda normalmente en `~/.local/bin/pio`. Si al ejecutar `pio` no lo encuentra, añádelo al PATH:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Y para que sea permanente, añade esa línea a `~/.bashrc`, `~/.zshrc` o el archivo de tu shell.
+
+### Opción alternativa: Homebrew (macOS / Linux)
+
+```bash
+brew install platformio
+```
+
+El binario `pio` queda disponible inmediatamente.
+
+### Opción alternativa: Arch Linux
+
+```bash
+sudo pacman -S platformio
+```
+
+Añade tu usuario al grupo `uucp` (o `lock`) para poder acceder al puerto serie sin `sudo`:
+
+```bash
+sudo usermod -a -G uucp $USER
+# Cierra sesión y vuelve a entrar, o ejecuta: newgrp uucp
+```
+
+### Opción alternativa: Windows (pip + VS Code)
+
+Además del método pip de arriba, puedes instalar la extensión **PlatformIO IDE** desde el marketplace de VS Code, que trae su propio Core y terminal integrado.
+
+### Verificar instalación
+
+```bash
+pio --version
+```
+
+Debe mostrar algo como:
+
+```text
+PlatformIO Core, version 6.1.16
+```
+
+### Permisos de puerto serie en Linux
+
+Para flashear sin `sudo`, añade tu usuario al grupo `dialout`:
+
+```bash
+sudo usermod -a -G dialout $USER
+```
+
+Cierra sesión y vuelve a entrar, o ejecuta `newgrp dialout` en la terminal actual.
+
 ## 1. Configura WiFi
 
 Edita `firmware/src/config.h` antes de compilar:
@@ -128,85 +201,110 @@ WiFi: connected, IP=...
 mDNS: responder started at http://pocketmeter.local/
 ```
 
-## 3. Arranca el panel web
+## 3. Run the local stack
 
-El panel actual se sirve desde el PC, no desde el ESP32.
+The practical entrypoint is now one command that starts both the local web UI and the provider daemon:
 
 ```bash
-cd daemon
-./web-server.sh
+./daemon/pocketmeter-stack.sh
 ```
 
-Abre:
+This runs:
+
+- the local web UI at `http://localhost:8080`
+- the multi-provider daemon that discovers the ESP32 and pushes usage payloads
+
+If your device is not reachable via the cached host, override it when launching:
+
+```bash
+POCKETMETER_ESP_HOST=pocketmeter.local ./daemon/pocketmeter-stack.sh
+# or
+POCKETMETER_ESP_HOST=192.168.1.180 ./daemon/pocketmeter-stack.sh
+```
+
+The daemon discovers the ESP32 in this order:
+
+1. `POCKETMETER_ESP_HOST` if set.
+2. Cache at `~/.config/pocketmeter/esp-ip`.
+3. Hostnames `pocketmeter.local`, `pocketmeter`, with `clawdmeter.local` and `clawdmeter` kept as compatibility fallbacks.
+4. Local subnet scan validated with `GET /api/status`.
+
+## 4. Linux foreground and background usage
+
+Foreground:
+
+```bash
+./daemon/pocketmeter-stack.sh
+```
+
+Background:
+
+```bash
+./daemon/pocketmeter-stack.sh --daemon
+./daemon/pocketmeter-stack.sh --status
+./daemon/pocketmeter-stack.sh --stop
+```
+
+Background logs are written to:
 
 ```text
-http://localhost:8080
+daemon/web-server.log
+daemon/pocketmeter-daemon.log
 ```
 
-Si tu ESP32 no está en `192.168.1.180`, indica la IP o hostname:
+If you only want one half of the stack, the old focused entrypoints still exist:
 
 ```bash
-ESP32_HOST=pocketmeter.local ./web-server.sh
-# o
-ESP32_HOST=192.168.1.180 ./web-server.sh
+./daemon/web-server.sh
+python3 daemon/pocketmeter-daemon.py
 ```
 
-Para dejarlo en segundo plano:
+## 5. Configure providers
 
-```bash
-./web-server.sh --daemon
-```
+There are two provider families.
 
-## 4. Arranca el daemon
+### Local-login providers
 
-Desde la raíz del repo:
-
-```bash
-python3 daemon/clawdmeter-daemon.py
-```
-
-El daemon intenta descubrir el ESP32 en este orden:
-
-1. `POCKETMETER_ESP_HOST` si está definido.
-2. Cache en `~/.config/claude-usage-monitor/esp-ip`.
-3. Hostnames `pocketmeter.local`, `pocketmeter`, `clawdmeter.local`, `clawdmeter`.
-4. Escaneo de la subred local validando `GET /api/status`.
-
-Si todo va bien, verás logs de descubrimiento, estado de proveedores y envíos periódicos al ESP32.
-
-## 5. Configura proveedores
-
-Hay dos familias de proveedores.
-
-### Proveedores con login local
-
-| Proveedor | Acción típica |
+| Provider | Typical action |
 | --- | --- |
-| Claude | Inicia sesión con Claude Code / Claude CLI. |
+| Claude | Sign in with Claude Code / Claude CLI. |
 | Codex | `codex login` |
-| Gemini | Ejecuta `gemini` y completa OAuth si lo pide. |
-| Copilot | `gh auth login --scopes copilot` o token compatible. |
-| Grok | Login local de Grok CLI. |
-| Windsurf | Instala Windsurf; el daemon lee datos locales si están disponibles. |
+| Gemini | Run `gemini` and complete OAuth if prompted. |
+| Copilot | `gh auth login --scopes copilot` or another compatible token flow. |
+| Grok | Sign in with the local Grok CLI flow. |
+| Windsurf | Install Windsurf; the daemon reads local plan data when available. |
 
-Después de configurar un login, reinicia el daemon.
+Restart the daemon after changing a local login.
 
-### Proveedores con API key
+### API-key providers
 
-Puedes guardar claves desde `http://localhost:8080` o exportarlas antes de arrancar el daemon.
+You can save keys from `http://localhost:8080` or export them before starting the daemon.
 
-| Proveedor | Variable |
+| Provider | Variable |
 | --- | --- |
 | OpenAI | `OPENAI_API_KEY` |
 | DeepSeek | `DEEPSEEK_API_KEY` |
-| Kimi / Moonshot | `KIMI_API_KEY` o `MOONSHOT_API_KEY` |
+| Kimi / Moonshot | `KIMI_API_KEY` or `MOONSHOT_API_KEY` |
 | Cursor | `CURSOR_SESSION_TOKEN` |
 
-Las claves guardadas desde el panel se almacenan en:
+Saved keys are stored at:
 
 ```text
 ~/.config/pocketmeter/api-keys.json
 ```
+
+The web UI now exposes provider management directly:
+
+- Toggle whether each available provider is shown on the device.
+- Pick which visible provider should own the generic provider screen.
+- Save a new API key over an existing one.
+- Clear a saved API key so you can replace it or fall back to env vars.
+
+### Kimi caveat
+
+PocketMeter validates Kimi credentials against `https://api.kimi.com/coding/v1/models` and will show Kimi as authenticated/available when that succeeds.
+
+It does **not** fabricate session or weekly percentages for Kimi. The Kimi Coding API currently gives PocketMeter an auth probe, but not the real usage-window metrics that Claude/Codex-style screens need. The web UI and device therefore show Kimi as available with an explicit no-metrics state instead of fake `0%` bars.
 
 ## Personalización de mascota y splash
 
@@ -260,7 +358,7 @@ El panel local del PC también hace de proxy hacia endpoints del ESP32 y añade 
 | Ruta | Contenido |
 | --- | --- |
 | `firmware/` | Firmware ESP32-S3 con LVGL, WiFi, servidor HTTP, BLE HID, UI y splash. |
-| `daemon/clawdmeter-daemon.py` | Daemon multi-proveedor que consulta APIs y envía datos al dispositivo. |
+| `daemon/pocketmeter-daemon.py` | Daemon multi-proveedor que consulta APIs y envía datos al dispositivo. |
 | `daemon/web-server.py` | Panel web local y proxy hacia el ESP32. |
 | `daemon/index.html` | UI web de configuración y estado. |
 | `tools/` | Scraping/conversión de animaciones pixel-art. |

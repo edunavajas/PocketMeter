@@ -1,18 +1,19 @@
 #!/bin/bash
-# Claude Usage Tracker Daemon (BLE)
+# PocketMeter BLE Daemon
 # Reads Claude Code OAuth token, polls usage via API, sends to ESP32 over BLE GATT.
-# Auto-connects and reconnects to the Claude Controller BLE device.
+# Auto-connects and reconnects to the PocketMeter BLE device.
 # Dependencies: curl, awk, bluetoothctl
 
-DEVICE_NAME="Claude Controller"
+DEVICE_NAME="Claude Controller"  # Legacy BLE name still advertised by the firmware.
 DEVICE_MAC="${DEVICE_MAC:-}"  # auto-discovered if empty
 SERVICE_UUID="4c41555a-4465-7669-6365-000000000001"
 RX_CHAR_UUID="4c41555a-4465-7669-6365-000000000002"
 REQ_CHAR_UUID="4c41555a-4465-7669-6365-000000000004"
 POLL_INTERVAL=60
 TICK=5
-SAVED_MAC_FILE="$HOME/.config/claude-usage-monitor/ble-address"
-REFRESH_FLAG="/tmp/claude-usage-refresh-$$"
+SAVED_MAC_FILE="$HOME/.config/pocketmeter/ble-address"
+LEGACY_SAVED_MAC_FILE="$HOME/.config/claude-usage-monitor/ble-address"
+REFRESH_FLAG="/tmp/pocketmeter-ble-refresh-$$"
 DBUS_DEST="org.bluez"
 NOTIFY_PID=""
 
@@ -42,15 +43,17 @@ is_connected() {
 # Load saved MAC address
 load_mac() {
     if [ -n "$DEVICE_MAC" ]; then return 0; fi
-    if [ -f "$SAVED_MAC_FILE" ]; then
-        DEVICE_MAC=$(head -1 "$SAVED_MAC_FILE" | tr -d '\r\n ')
-        if [[ "$DEVICE_MAC" =~ ^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$ ]]; then
-            return 0
+    for cache_file in "$SAVED_MAC_FILE" "$LEGACY_SAVED_MAC_FILE"; do
+        if [ -f "$cache_file" ]; then
+            DEVICE_MAC=$(head -1 "$cache_file" | tr -d '\r\n ')
+            if [[ "$DEVICE_MAC" =~ ^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$ ]]; then
+                return 0
+            fi
+            log "Cached MAC is malformed, discarding"
+            rm -f "$cache_file"
+            DEVICE_MAC=""
         fi
-        log "Cached MAC is malformed, discarding"
-        rm -f "$SAVED_MAC_FILE"
-        DEVICE_MAC=""
-    fi
+    done
     return 1
 }
 
@@ -60,7 +63,7 @@ save_mac() {
     echo "$DEVICE_MAC" > "$SAVED_MAC_FILE"
 }
 
-# Scan for Claude Controller
+# Scan for the PocketMeter BLE device.
 scan_for_device() {
     log "Scanning for '$DEVICE_NAME'..."
     # Start LE scan
@@ -104,6 +107,9 @@ connect_device() {
     if [ -f "$SAVED_MAC_FILE" ] && [ "$(cat "$SAVED_MAC_FILE")" = "$DEVICE_MAC" ]; then
         log "Invalidating cached MAC, will rescan by name"
         rm -f "$SAVED_MAC_FILE"
+    fi
+    if [ -f "$LEGACY_SAVED_MAC_FILE" ] && [ "$(cat "$LEGACY_SAVED_MAC_FILE")" = "$DEVICE_MAC" ]; then
+        rm -f "$LEGACY_SAVED_MAC_FILE"
     fi
     # Remove from bluez so the next scan won't re-pick this dead MAC.
     # If the device comes back online it'll re-advertise and be re-discovered.
@@ -244,7 +250,7 @@ cleanup() {
 
 trap cleanup INT TERM
 
-log "=== Claude Usage Tracker Daemon (BLE) ==="
+log "=== PocketMeter BLE Daemon ==="
 log "Poll interval: ${POLL_INTERVAL}s"
 
 BACKOFF=1

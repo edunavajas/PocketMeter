@@ -1,0 +1,1316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PocketMeter</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+/* ── TOKENS ─────────────────────────────────────────────────────────────── */
+:root {
+  --canvas:       #fdfcfc;
+  --ink:          #201d1d;
+  --charcoal:     #302c2c;
+  --body:         #424245;
+  --mute:         #646262;
+  --stone:        #6e6e73;
+  --ash:          #9a9898;
+  --soft:         #f8f7f7;
+  --card:         #f1eeee;
+  --dark:         #201d1d;
+  --dark-e:       #302c2c;
+  --hair:         rgba(15,0,0,0.12);
+  --hair-s:       #646262;
+  --accent:       #007aff;
+  --danger:       #ff3b30;
+  --warn:         #ff9f0a;
+  --ok:           #30d158;
+  --r:            4px;
+  --font: 'JetBrains Mono','IBM Plex Mono',ui-monospace,'SFMono-Regular',Menlo,Monaco,Consolas,monospace;
+}
+
+/* ── RESET ──────────────────────────────────────────────────────────────── */
+*,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
+html { font-size:16px; scroll-behavior:smooth; }
+body {
+  background:var(--canvas); color:var(--ink);
+  font-family:var(--font); font-size:16px; line-height:1.5;
+  -webkit-font-smoothing:antialiased;
+}
+a { color:var(--ink); }
+
+/* ── NAV ────────────────────────────────────────────────────────────────── */
+nav {
+  position:sticky; top:0; z-index:10;
+  background:var(--canvas); border-bottom:1px solid var(--hair);
+  height:56px; display:flex; align-items:center;
+  padding:0 24px; gap:12px;
+}
+.nav-brand { font-size:16px; font-weight:700; letter-spacing:.04em; }
+.nav-sep   { color:var(--ash); }
+.nav-sub   { font-size:14px; color:var(--mute); }
+.nav-right { margin-left:auto; display:flex; align-items:center; gap:8px; font-size:13px; color:var(--mute); }
+.dot { width:8px; height:8px; border-radius:50%; background:var(--ash); flex-shrink:0; transition:background .3s; }
+.dot.ok  { background:var(--ok); }
+.dot.err { background:var(--danger); }
+
+/* ── LAYOUT ─────────────────────────────────────────────────────────────── */
+main {
+  margin:0 auto; padding:40px 32px 80px;
+  display:grid; grid-template-columns:1fr 320px; gap:0 48px; align-items:start;
+}
+.sidebar {
+  position:sticky; top:72px;
+  max-height:calc(100vh - 88px); overflow-y:auto;
+  padding-bottom:24px;
+}
+.sidebar::-webkit-scrollbar { width:4px; }
+.sidebar::-webkit-scrollbar-thumb { background:var(--hair); border-radius:2px; }
+.main-content {}
+@media(max-width:960px){
+  main { grid-template-columns:1fr; }
+  .sidebar { position:static; max-height:none; }
+  nav { padding:0 16px; }
+}
+@media(max-width:640px){ main { padding:24px 16px 48px; } }
+
+/* ── SECTIONS ────────────────────────────────────────────────────────────── */
+.sec { border-top:1px solid var(--hair); padding-top:32px; margin-top:32px; }
+.sec:first-child { border-top:none; margin-top:0; padding-top:0; }
+.sidebar .sec { padding-top:24px; margin-top:24px; }
+.sidebar .sec:first-child { padding-top:0; margin-top:0; }
+.sec-label {
+  font-size:16px; font-weight:700; margin-bottom:24px;
+  display:flex; align-items:center; gap:8px;
+}
+.sec-label::before { content:'[+]'; color:var(--ash); font-weight:400; }
+.sec-hint { font-size:13px; color:var(--stone); margin-top:-16px; margin-bottom:20px; }
+
+/* ── PROVIDER ROWS ───────────────────────────────────────────────────────── */
+.prov { border-top:1px solid var(--hair); padding:20px 0; }
+.prov:first-child { border-top:none; padding-top:0; }
+.prov-header { display:flex; align-items:center; gap:10px; }
+.prov-logo {
+  width:28px; height:28px; border-radius:var(--r);
+  background:var(--card); display:flex; align-items:center; justify-content:center;
+  flex-shrink:0;
+}
+.prov-logo img { width:18px; height:18px; object-fit:contain; display:block; }
+.prov-dot { width:6px; height:6px; border-radius:50%; flex-shrink:0; }
+.prov-name { font-size:16px; font-weight:700; flex:1; }
+.badge {
+  font-size:12px; padding:2px 8px; border-radius:var(--r);
+  background:var(--card); color:var(--stone);
+}
+.badge.live { background:var(--dark); color:var(--canvas); }
+.badge.warn { background:var(--warn); color:var(--dark); }
+
+/* ── USAGE BARS ──────────────────────────────────────────────────────────── */
+.usage { margin-top:14px; padding-left:38px; }
+.urow  { display:flex; align-items:center; gap:10px; margin-bottom:8px; font-size:14px; }
+.ulabel { width:60px; flex-shrink:0; color:var(--mute); }
+.utrack { flex:1; height:4px; background:var(--card); border-radius:2px; overflow:hidden; }
+.ufill  { height:100%; border-radius:2px; background:var(--ink); transition:width .5s ease; }
+.ufill.w { background:var(--warn); }
+.ufill.d { background:var(--danger); }
+.upct  { width:40px; text-align:right; flex-shrink:0; font-weight:500; color:var(--ink); font-size:14px; }
+.uhint { font-size:13px; color:var(--stone); margin-top:4px; }
+.ucredits { font-size:14px; color:var(--body); margin-top:4px; }
+
+/* ── PROVIDER SETUP ──────────────────────────────────────────────────────── */
+.setup { margin-top:14px; padding-left:38px; }
+.setup-err { font-size:13px; color:var(--mute); margin-bottom:8px; }
+.cmd-row {
+  display:flex; align-items:center; gap:8px;
+  background:var(--card); border:1px solid var(--hair); border-radius:var(--r);
+  padding:8px 12px; font-size:14px;
+}
+.cmd-prompt { color:var(--ash); flex-shrink:0; }
+.cmd-txt { flex:1; }
+.copy-btn {
+  background:transparent; border:1px solid var(--hair); border-radius:var(--r);
+  padding:2px 8px; font-family:var(--font); font-size:12px; line-height:2;
+  color:var(--mute); cursor:pointer;
+}
+.copy-btn:hover { color:var(--ink); border-color:var(--ink); }
+.key-form { display:flex; gap:8px; align-items:stretch; }
+.key-in {
+  flex:1; background:var(--soft); border:1px solid var(--hair); border-radius:var(--r);
+  padding:8px 12px; font-family:var(--font); font-size:14px; color:var(--ink);
+  height:40px; outline:none;
+}
+.key-in:focus { background:var(--canvas); border-color:var(--ink); }
+.setup-hint { font-size:13px; color:var(--stone); margin-top:6px; }
+
+/* ── BUTTONS ─────────────────────────────────────────────────────────────── */
+.btn {
+  background:var(--ink); color:var(--canvas); border:none; border-radius:var(--r);
+  padding:4px 20px; height:40px; font-family:var(--font); font-size:16px;
+  font-weight:500; line-height:2; cursor:pointer; flex-shrink:0;
+}
+.btn:hover   { background:var(--charcoal); }
+.btn:active  { background:#0f0000; }
+.btn:disabled{ background:var(--card); color:var(--ash); cursor:not-allowed; }
+.btn-sm {
+  background:var(--canvas); color:var(--ink); border:1px solid var(--hair-s);
+  border-radius:var(--r); padding:2px 12px; height:30px;
+  font-family:var(--font); font-size:13px; font-weight:500; line-height:2; cursor:pointer;
+}
+.btn-sm:hover { border-color:var(--ink); }
+.btn-ghost {
+  background:transparent; color:var(--mute); border:1px solid var(--hair);
+  border-radius:var(--r); padding:2px 10px; height:28px;
+  font-family:var(--font); font-size:12px; font-weight:500; cursor:pointer;
+}
+.btn-ghost:hover { color:var(--ink); border-color:var(--ink); }
+.btn-ghost.active { background:var(--dark); color:var(--canvas); border-color:var(--dark); }
+
+/* ── SPLASH ANIMATION GRID ───────────────────────────────────────────────── */
+.anim-grid {
+  display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(130px,1fr));
+  gap:12px;
+}
+.anim-card {
+  border:1px solid var(--hair); border-radius:var(--r);
+  padding:12px; display:flex; flex-direction:column; align-items:center; gap:8px;
+  cursor:pointer; background:var(--canvas); transition:border-color .15s;
+}
+.anim-card:hover { border-color:var(--ink); }
+.anim-card.pinned { border-color:var(--ink); background:var(--soft); }
+.anim-card canvas { display:block; image-rendering:pixelated; border-radius:2px; }
+.anim-name { font-size:12px; font-weight:500; color:var(--ink); text-align:center; line-height:1.3; }
+.anim-cat  { font-size:11px; color:var(--stone); text-align:center; }
+.anim-tag  { font-size:11px; color:var(--ash); background:var(--card); padding:1px 6px; border-radius:var(--r); margin-top:2px; }
+.anim-set-btn {
+  background:var(--dark); color:var(--canvas); border:none; border-radius:var(--r);
+  padding:2px 10px; height:26px; font-family:var(--font); font-size:12px;
+  font-weight:500; cursor:pointer; width:100%;
+}
+.anim-set-btn:hover { background:var(--charcoal); }
+.anim-set-btn.current { background:transparent; color:var(--stone); border:1px solid var(--hair); cursor:default; }
+
+/* ── COMPANION ASSIGNMENTS ───────────────────────────────────────────────── */
+.companion-row {
+  display:flex; align-items:center; gap:14px;
+  padding:14px 0; border-bottom:1px solid var(--hair);
+}
+.companion-row:last-child { border-bottom:none; }
+.companion-prov { display:flex; align-items:center; gap:6px; width:100px; flex-shrink:0; }
+.companion-dot  { width:6px; height:6px; border-radius:50%; flex-shrink:0; }
+.companion-pname { font-size:14px; font-weight:500; }
+.companion-img  { width:56px; height:56px; object-fit:cover; border-radius:var(--r); border:1px solid var(--hair); background:var(--card); flex-shrink:0; }
+.companion-img.empty { background:var(--card); }
+.companion-info { flex:1; min-width:0; }
+.companion-cname { font-size:14px; font-weight:700; }
+.companion-slug  { font-size:12px; color:var(--stone); margin-top:2px; }
+.companion-empty { font-size:14px; color:var(--ash); flex:1; }
+
+/* ── PETDEX SEARCH ───────────────────────────────────────────────────────── */
+.pdex-sep { border-top:1px solid var(--hair); margin-top:24px; padding-top:24px; }
+.pdex-title { font-size:14px; font-weight:700; color:var(--mute); margin-bottom:12px; }
+.sf { display:flex; gap:8px; margin-bottom:12px; }
+.si {
+  flex:1; background:var(--soft); border:1px solid var(--hair); border-radius:var(--r);
+  padding:8px 12px; font-family:var(--font); font-size:16px; color:var(--ink);
+  height:40px; outline:none;
+}
+.si:focus { background:var(--canvas); border-color:var(--ink); }
+.pdex-status { font-size:13px; color:var(--stone); margin-bottom:16px; }
+
+.pet-card { border:1px solid var(--hair); border-radius:var(--r); padding:16px; margin-bottom:12px; }
+.pet-card:last-child { margin-bottom:0; }
+.pet-card-hd { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; margin-bottom:4px; }
+.pet-mname  { font-size:16px; font-weight:700; }
+.pet-mdesc  { font-size:13px; color:var(--body); margin-top:4px; line-height:1.4; }
+.pet-mvibes { font-size:12px; color:var(--mute); margin-top:4px; }
+.pet-mvibes span { background:var(--card); padding:1px 6px; border-radius:var(--r); margin-right:4px; }
+
+/* ── PET SPRITE ANIMATION ────────────────────────────────────────────────── */
+@keyframes pet-anim {
+  from { background-position: 0 var(--sy); }
+  to   { background-position: var(--sx) var(--sy); }
+}
+.pet-states { display:flex; flex-wrap:wrap; gap:6px; margin-top:12px; }
+.pet-state-card {
+  border:1px solid var(--hair); border-radius:var(--r);
+  padding:6px; display:flex; flex-direction:column; align-items:center; gap:4px;
+  cursor:pointer; transition:border-color .15s;
+}
+.pet-state-card:hover { border-color:var(--ink); }
+.pet-state-card.active { border-color:var(--ink); background:var(--soft); }
+.pet-state-wrap { width:48px; height:52px; overflow:hidden; position:relative; flex-shrink:0; }
+.pet-state-sprite {
+  position:absolute; top:0; left:0; width:192px; height:208px;
+  background-repeat:no-repeat; background-size:1536px 1872px;
+  image-rendering:pixelated;
+  transform:scale(0.25); transform-origin:top left;
+  animation: pet-anim var(--sd) steps(var(--sf)) infinite;
+}
+.pet-state-lbl { font-size:10px; color:var(--stone); text-align:center; line-height:1.2; width:100%; }
+.pet-state-btn {
+  background:var(--dark); color:var(--canvas); border:none; border-radius:var(--r);
+  padding:1px 8px; height:22px; font-family:var(--font); font-size:11px;
+  font-weight:500; cursor:pointer; width:100%;
+}
+.pet-state-btn:hover { background:var(--charcoal); }
+.pet-state-btn.current { background:transparent; color:var(--stone); border:1px solid var(--hair); cursor:default; }
+
+/* companion animated sprite */
+.companion-sprite-wrap {
+  width:56px; height:61px; overflow:hidden; position:relative; flex-shrink:0;
+  border:1px solid var(--hair); border-radius:var(--r); background:var(--card);
+}
+.companion-sprite {
+  position:absolute; top:0; left:0; width:192px; height:208px;
+  background-repeat:no-repeat; background-size:1536px 1872px;
+  image-rendering:pixelated;
+  transform:scale(0.2917); transform-origin:top left;
+  animation: pet-anim var(--sd) steps(var(--sf)) infinite;
+}
+
+/* ── DISPLAY CONFIG ──────────────────────────────────────────────────────── */
+.cfg-row {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:10px 0; border-bottom:1px solid var(--hair); font-size:14px;
+}
+.cfg-row:last-child { border-bottom:none; }
+.cfg-lbl { color:var(--body); display:flex; align-items:center; gap:6px; }
+.tgl { position:relative; display:inline-block; width:44px; height:24px; }
+.tgl input { opacity:0; width:0; height:0; }
+.tgl-track {
+  position:absolute; inset:0; background:var(--card); border:1px solid var(--hair);
+  border-radius:12px; cursor:pointer; transition:background .2s, border-color .2s;
+}
+.tgl-track::before {
+  content:''; position:absolute; width:16px; height:16px; left:3px; top:3px;
+  background:var(--ash); border-radius:50%; transition:transform .2s, background .2s;
+}
+.tgl input:checked+.tgl-track { background:var(--ink); border-color:var(--ink); }
+.tgl input:checked+.tgl-track::before { transform:translateX(20px); background:var(--canvas); }
+.rpg { display:flex; flex-wrap:wrap; gap:6px; }
+.rp {
+  display:flex; align-items:center; gap:6px; padding:4px 12px;
+  border:1px solid var(--hair); border-radius:var(--r); cursor:pointer;
+  font-size:14px; color:var(--mute); background:var(--canvas); transition:border-color .15s, color .15s;
+}
+.rp input { display:none; }
+.rp.sel { border-color:var(--ink); color:var(--ink); background:var(--soft); }
+
+/* ── DEVICE TABLE ────────────────────────────────────────────────────────── */
+.drow {
+  display:flex; justify-content:space-between; align-items:center;
+  padding:8px 0; border-bottom:1px solid var(--hair); font-size:14px;
+}
+.drow:last-child { border-bottom:none; }
+.dkey { color:var(--mute); }
+.dval { color:var(--ink); font-weight:500; }
+.pill {
+  background:var(--card); border-radius:var(--r); padding:1px 8px; font-size:13px;
+}
+
+/* ── LOADING / EMPTY ─────────────────────────────────────────────────────── */
+.loading { font-size:14px; color:var(--stone); }
+</style>
+</head>
+<body>
+
+<nav>
+  <span class="nav-brand">POCKETMETER</span>
+  <span class="nav-sep">·</span>
+  <span class="nav-sub">AI Usage Monitor</span>
+  <div class="nav-right">
+    <div class="dot" id="ndot"></div>
+    <span id="ntxt">—</span>
+  </div>
+</nav>
+
+<main>
+
+  <!-- ── MAIN CONTENT ──────────────────────────────────────────────────────── -->
+  <div class="main-content">
+
+    <!-- USAGE -->
+    <section class="sec">
+      <div class="sec-label">USAGE</div>
+      <div id="providers-list"><div class="loading">Loading…</div></div>
+    </section>
+
+    <!-- COMPANIONS -->
+    <section class="sec">
+      <div class="sec-label">COMPANIONS</div>
+      <div id="companions-list"><div class="loading">Loading…</div></div>
+
+      <div class="pdex-sep">
+        <div class="pdex-title">Search PetDex</div>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+          <span style="font-size:13px;color:var(--stone);flex-shrink:0;">Assign to:</span>
+          <div id="pet-target-picker" class="rpg"></div>
+        </div>
+        <form class="sf" id="pform">
+          <input class="si" id="psq" type="search" placeholder="otter, cat, doraemon…" autocomplete="off">
+          <button type="submit" class="btn">Search</button>
+        </form>
+        <div class="pdex-status" id="pss">Search to find a companion for any provider.</div>
+        <div id="pres"></div>
+      </div>
+    </section>
+
+  </div>
+
+  <!-- ── SIDEBAR ───────────────────────────────────────────────────────────── -->
+  <aside class="sidebar">
+
+    <!-- DEVICE SPLASH -->
+    <section class="sec">
+      <div class="sec-label">DEVICE SPLASH</div>
+      <p class="sec-hint">Select which animation plays on the ESP32 splash screen.</p>
+      <div id="splash-grid" class="anim-grid"><div class="loading">Loading animations…</div></div>
+    </section>
+
+    <!-- DISPLAY -->
+    <section class="sec">
+      <div class="sec-label">DISPLAY</div>
+      <div id="display-cfg"><div class="loading">Loading…</div></div>
+    </section>
+
+    <!-- DEVICE -->
+    <section class="sec">
+      <div class="sec-label">DEVICE</div>
+      <div id="device-info">
+        <div class="drow"><span class="dkey">WiFi</span><span class="dval" id="d-wifi">—</span></div>
+        <div class="drow"><span class="dkey">SSID</span><span class="dval" id="d-ssid">—</span></div>
+        <div class="drow"><span class="dkey">IP</span><span class="dval" id="d-ip">—</span></div>
+        <div class="drow"><span class="dkey">Signal</span><span class="dval" id="d-rssi">—</span></div>
+        <div class="drow"><span class="dkey">Uptime</span><span class="dval" id="d-up">—</span></div>
+        <div class="drow"><span class="dkey">Last poll</span><span class="dval" id="d-ts">—</span></div>
+      </div>
+    </section>
+
+  </aside>
+
+</main>
+
+<script>
+(function(){
+'use strict';
+
+// ── Provider registry ────────────────────────────────────────────────────
+const DEFS = [
+  { id:'claude',   name:'Claude',   type:'oauth',   cmd:'claude login',
+    env:null,   hint:null,     domain:'claude.ai',        color:'#d97757' },
+  { id:'codex',    name:'Codex',    type:'oauth',   cmd:'codex login',
+    env:null,   hint:null,     domain:'chatgpt.com',      color:'#10a37f' },
+  { id:'gemini',   name:'Gemini',   type:'oauth',   cmd:'gemini',
+    env:null,   hint:null,     domain:'gemini.google.com',color:'#AB87EA' },
+  { id:'copilot',  name:'Copilot',  type:'oauth',   cmd:'gh auth login --scopes copilot',
+    env:null,   hint:null,     domain:'github.com',       color:'#0078D4' },
+  { id:'grok',     name:'Grok',     type:'oauth',   cmd:'grok',
+    env:null,   hint:null,     domain:'x.com',            color:'#9a9898' },
+  { id:'openai',   name:'OpenAI',   type:'apikey',  cmd:null,
+    env:'OPENAI_API_KEY',  hint:'Get your key at platform.openai.com/api-keys',
+    domain:'openai.com',       color:'#74AA9C' },
+  { id:'deepseek', name:'DeepSeek', type:'apikey',  cmd:null,
+    env:'DEEPSEEK_API_KEY',hint:'Get your key at platform.deepseek.com',
+    domain:'deepseek.com',     color:'#4D6BFE' },
+  { id:'windsurf', name:'Windsurf', type:'install', cmd:null,
+    env:null,   hint:'Install Windsurf from windsurf.com — reads plan info automatically.',
+    domain:'windsurf.com',     color:'#00BFA5' },
+  { id:'cursor',   name:'Cursor',   type:'token',   cmd:null,
+    env:'CURSOR_SESSION_TOKEN',
+    hint:'Copy WorkosCursorSessionToken cookie from cursor.com',
+    domain:'cursor.com',       color:'#00BCA5' },
+  { id:'kimi',     name:'Kimi',     type:'apikey',  cmd:null,
+    env:'KIMI_API_KEY',    hint:'Use a Kimi Coding API key for https://api.kimi.com/coding/v1',
+    domain:'kimi.com',         color:'#FF6B35' },
+];
+const DMAP = {};
+for (const d of DEFS) DMAP[d.id] = d;
+
+// PetDex spritesheet format (from petdex/src/lib/pet-states.ts)
+// Each cell: 192×208 px  |  Sheet: 1536×1872  |  8 cols max, 9 rows
+const PET_STATES = [
+  { id:'idle',          label:'Idle',    row:0, frames:6, dur:1100 },
+  { id:'running-right', label:'Run →',   row:1, frames:8, dur:1060 },
+  { id:'running-left',  label:'← Run',   row:2, frames:8, dur:1060 },
+  { id:'waving',        label:'Wave',    row:3, frames:4, dur:700  },
+  { id:'jumping',       label:'Jump',    row:4, frames:5, dur:840  },
+  { id:'failed',        label:'Fail',    row:5, frames:8, dur:1220 },
+  { id:'waiting',       label:'Wait',    row:6, frames:6, dur:1010 },
+  { id:'running',       label:'Run',     row:7, frames:6, dur:820  },
+  { id:'review',        label:'Review',  row:8, frames:6, dur:1030 },
+];
+
+// ── State ────────────────────────────────────────────────────────────────
+let S = {
+  claude:true, codex:true,
+  selected_provider:'claude', selected_provider_ext:'claude',
+  pets:{}, provider_visibility:{}, providers:[],
+};
+let live = [];
+let sres = [];
+let lastAck = null;
+let inFlight = false, queued = false;
+let lastTs = null;
+let splashPinned = '';
+let splashConfigs = {}; // per-provider: { type:'claudepix'|'petdex', name, ...params }
+let animDefs = [];
+let animStoppers = [];
+let petTargetProvider = 'claude';
+let savedKeys = new Set();
+
+// ── Helpers ──────────────────────────────────────────────────────────────
+function esc(v){ return String(v||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+function emptyPet(){ return {assigned:false,id:'',slug:'',displayName:'',spritesheetPath:'',petJsonPath:'',dominantColor:'',previewImagePath:'',description:'',vibes:[],stateId:'idle',stateRow:0,stateFrames:6,stateDur:1100}; }
+
+function normPet(p){
+  if(!p) return emptyPet();
+  const ok=!!(p.assigned||((p.id||p.slug)&&(p.displayName||p.display_name)));
+  if(!ok) return emptyPet();
+  return {
+    assigned:true,
+    id:String(p.id||''), slug:String(p.slug||''),
+    displayName:String(p.displayName||p.display_name||''),
+    spritesheetPath:String(p.spritesheetPath||p.spritesheet_path||''),
+    petJsonPath:String(p.petJsonPath||p.pet_json_path||''),
+    dominantColor:String(p.dominantColor||p.dominant_color||''),
+    previewImagePath:String(p.previewImagePath||p.preview_image_path||p.spritesheetPath||p.spritesheet_path||''),
+    description:String(p.description||''),
+    vibes:Array.isArray(p.vibes)?p.vibes.map(String):[],
+    stateId:String(p.stateId||'idle'),
+    stateRow:Number(p.stateRow??0),
+    stateFrames:Number(p.stateFrames??6),
+    stateDur:Number(p.stateDur??1100),
+  };
+}
+
+function barCls(pct){ return pct>=80?'d':(pct>=50?'w':''); }
+
+function providerVisible(id){
+  if(id==='claude') return !!S.claude;
+  if(id==='codex') return !!S.codex;
+  return S.provider_visibility[id]!==false;
+}
+
+function liveProvider(id){
+  return live.find(p=>p.provider===id) || null;
+}
+
+function manageableProviders(){
+  const ids = new Set(['claude','codex']);
+  for(const pd of live) ids.add(pd.provider);
+  for(const id of savedKeys) ids.add(id);
+  return DEFS.filter(def=>ids.has(def.id));
+}
+
+function ensureVisibleSelection(){
+  const current=S.selected_provider_ext||S.selected_provider;
+  const currentLive=liveProvider(current);
+  if(currentLive && currentLive.ok && providerVisible(current)) return;
+  const fallback=live.find(pd=>pd.ok && providerVisible(pd.provider));
+  if(!fallback) return;
+  S.selected_provider=(fallback.provider==='codex')?'codex':'claude';
+  S.selected_provider_ext=fallback.provider;
+}
+
+function fmtUp(ms){
+  const s=Math.floor(ms/1000),m=Math.floor(s/60),h=Math.floor(m/60);
+  if(h>0) return h+'h '+m%60+'m';
+  if(m>0) return m+'m '+s%60+'s';
+  return s+'s';
+}
+
+function ago(d){
+  if(!d) return '—';
+  const s=Math.floor((Date.now()-d)/1000);
+  if(s<5)   return 'just now';
+  if(s<60)  return s+'s ago';
+  if(s<3600)return Math.floor(s/60)+'m ago';
+  return Math.floor(s/3600)+'h ago';
+}
+
+function favicon(domain){
+  return 'https://www.google.com/s2/favicons?domain='+encodeURIComponent(domain)+'&sz=32';
+}
+
+// ── Snapshot ─────────────────────────────────────────────────────────────
+function trimPet(pet){
+  // Strip web-only fields before sending to device — avoids large payloads
+  // (description, vibes, previewImagePath are redundant; device ignores them)
+  if(!pet||!pet.assigned) return {assigned:false};
+  return {
+    assigned: pet.assigned,
+    id: pet.id,
+    slug: pet.slug,
+    displayName: pet.displayName,
+    spritesheetPath: pet.spritesheetPath,
+    petJsonPath: pet.petJsonPath,
+    dominantColor: pet.dominantColor,
+    stateId: pet.stateId,
+    stateRow: pet.stateRow,
+    stateFrames: pet.stateFrames,
+    stateDur: pet.stateDur,
+  };
+}
+
+function snap(){
+  const pets = {};
+  for(const prov of Object.keys(S.pets)){
+    pets[prov] = trimPet(S.pets[prov]);
+  }
+  if(!pets.claude) pets.claude = trimPet(emptyPet());
+  if(!pets.codex)  pets.codex  = trimPet(emptyPet());
+  return {
+    claude:S.claude, codex:S.codex,
+    selected_provider:S.selected_provider,
+    selected_provider_ext:S.selected_provider_ext||S.selected_provider,
+    pets, providers:S.providers,
+    provider_visibility:S.provider_visibility,
+  };
+}
+
+// ── Config flush ─────────────────────────────────────────────────────────
+async function flush(){
+  if(inFlight){ queued=true; return; }
+  inFlight=true; queued=false;
+  try{
+    const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(snap())});
+    if(!r.ok) throw 0;
+    const cfg=await r.json();
+    lastAck=cfg;
+    applyConfig(cfg);
+    renderCompanions();
+    renderDisplay();
+  }catch(e){
+    if(lastAck) applyConfig(lastAck);
+  }finally{
+    inFlight=false;
+    if(queued){ queued=false; flush(); }
+  }
+}
+
+function applyConfig(cfg){
+  S.claude   = !!cfg.claude;
+  S.codex    = !!cfg.codex;
+  S.selected_provider     = cfg.selected_provider||'claude';
+  S.selected_provider_ext = cfg.selected_provider_ext||cfg.selected_provider||'claude';
+  S.providers = cfg.providers||S.providers||[];
+  if(cfg.pets){
+    for(const k of Object.keys(cfg.pets)){
+      const raw=cfg.pets[k]||{};
+      const incoming=normPet(raw);
+      const cur=S.pets[k]||emptyPet();
+      // If device didn't confirm an assigned pet, trust our local state
+      // (device may have failed to persist or NVS is lagging)
+      if(!incoming.assigned && cur.assigned) continue;
+      // Preserve web-only state fields the device doesn't store
+      if(!('stateRow' in raw) && cur.assigned && cur.slug===incoming.slug){
+        incoming.stateId=cur.stateId;
+        incoming.stateRow=cur.stateRow;
+        incoming.stateFrames=cur.stateFrames;
+        incoming.stateDur=cur.stateDur;
+      }
+      S.pets[k]=incoming;
+    }
+  }
+  if(cfg.provider_visibility){
+    for(const k of Object.keys(cfg.provider_visibility)) S.provider_visibility[k]=!!cfg.provider_visibility[k];
+  }
+  ensureVisibleSelection();
+}
+
+// ── Load dashboard ───────────────────────────────────────────────────────
+async function load(){
+  try{
+    const [statusR, splashR, cfgsR, keysR] = await Promise.allSettled([
+      fetch('/api/status'),
+      fetch('/api/splash'),
+      fetch('/api/splash-configs'),
+      fetch('/api/auth/keys'),
+    ]);
+
+    if(statusR.status === 'fulfilled' && statusR.value.ok){
+      const d = await statusR.value.json();
+      const dot=document.getElementById('ndot'), txt=document.getElementById('ntxt');
+      if(d.wifi_connected){
+        dot.className='dot ok'; txt.textContent=d.ip||'Connected';
+      } else {
+        dot.className='dot err'; txt.textContent='WiFi offline';
+      }
+      live = d.providers||[];
+      if(d.config) applyConfig(d.config);
+      lastTs = Date.now();
+
+      const $ = id=>document.getElementById(id);
+      $('d-wifi').textContent = d.wifi_connected?'Connected':'Disconnected';
+      $('d-wifi').style.color = d.wifi_connected?'var(--ok)':'var(--danger)';
+      $('d-ssid').textContent = d.ssid||'—';
+      $('d-ip').innerHTML     = '<span class="pill">'+esc(d.ip||'—')+'</span>';
+      $('d-rssi').textContent = d.rssi?(d.rssi+' dBm'):'—';
+      $('d-up').textContent   = d.uptime_ms?fmtUp(d.uptime_ms):'—';
+    } else {
+      const dot=document.getElementById('ndot'), txt=document.getElementById('ntxt');
+      dot.className='dot err'; txt.textContent='ESP32 unreachable';
+    }
+
+    if(splashR.status === 'fulfilled' && splashR.value.ok){
+      const sd = await splashR.value.json();
+      splashPinned = sd.pinned || '';
+    }
+
+    if(cfgsR.status === 'fulfilled' && cfgsR.value.ok){
+      splashConfigs = await cfgsR.value.json() || {};
+    }
+
+    if(keysR.status === 'fulfilled' && keysR.value.ok){
+      const kd = await keysR.value.json();
+      savedKeys = new Set(Array.isArray(kd.configured) ? kd.configured.map(String) : []);
+    }
+
+    renderProviders();
+    renderCompanions();
+    renderDisplay();
+    updateSplashUI();
+
+    renderPetTargetPicker();
+
+    // Re-push all custom splash configs after reboot (PSRAM custom anims are volatile)
+    const activeProvAtLoad = S.selected_provider_ext || S.selected_provider;
+    for (const provider in splashConfigs) {
+      if (splashConfigs[provider]) {
+        const isActive = (provider === activeProvAtLoad);
+        applyProviderSplash(provider, {forcePin: isActive});
+      }
+    }
+  }catch(e){
+    const dot=document.getElementById('ndot'), txt=document.getElementById('ntxt');
+    if(dot) dot.className='dot err';
+    if(txt) txt.textContent='unreachable';
+  }
+}
+
+// ── Render providers (USAGE section) ────────────────────────────────────
+function renderProviders(){
+  const host=document.getElementById('providers-list');
+  if(!host) return;
+  const lmap={};
+  for(const pd of live) lmap[pd.provider]=pd;
+  host.innerHTML = DEFS.map(def=>provHtml(def,lmap[def.id])).join('');
+}
+
+function provHtml(def,pd){
+  const ok=pd&&pd.ok;
+  const configured=!!savedKeys.has(def.id) || !!(pd&&(pd.configured===undefined?pd.ok:pd.configured));
+  let h='<div class="prov">';
+  h+='<div class="prov-header">';
+  h+=`<div class="prov-logo"><img src="${favicon(def.domain)}" width="18" height="18" alt="" onerror="this.style.opacity=0"></div>`;
+  h+=`<div class="prov-dot" style="background:${def.color}"></div>`;
+  h+=`<span class="prov-name">${esc(def.name)}</span>`;
+  if(ok){
+    const plan=pd.plan_type||'connected';
+    h+=`<span class="badge live">${esc(plan)}</span>`;
+  } else if(configured) {
+    h+=`<span class="badge warn">Needs attention</span>`;
+  } else {
+    h+=`<span class="badge">Not configured</span>`;
+  }
+  h+='</div>';
+  if(ok){
+    h+=usageHtml(pd);
+    if(def.type==='apikey'||def.type==='token') h+=keyManagerHtml(def);
+  } else {
+    h+=setupHtml(def, pd&&pd.error?pd.error:'');
+  }
+  h+='</div>';
+  return h;
+}
+
+function keyManagerHtml(def){
+  let h='<div class="setup">';
+  h+=`<div class="setup-hint">Saved locally. Replace it here or clear it if you want to switch accounts.</div>`;
+  h+=setupKeyFormHtml(def);
+  if(def.hint) h+=`<div class="setup-hint">${esc(def.hint)}</div>`;
+  if(def.env)  h+=`<div class="setup-hint">Or override with env var: <span class="pill">${esc(def.env)}</span></div>`;
+  h+='</div>';
+  return h;
+}
+
+function usageHtml(pd){
+  let h='<div class="usage">';
+  const isApi=pd.plan_type==='api'||pd.plan_type==='api/usd'||pd.plan_type==='api/cny';
+  if(pd.metrics_available===false){
+    h+=`<div class="ucredits">Authenticated and available</div>`;
+    if(pd.note) h+=`<div class="uhint">${esc(pd.note)}</div>`;
+    h+=`<div class="uhint">PocketMeter does not invent Kimi percentages when the API does not expose them.</div>`;
+    h+='</div>';
+    return h;
+  }
+  if(pd.has_credits&&pd.credits_balance!==undefined){
+    h+=`<div class="ucredits">Balance: <strong>$${pd.credits_balance.toFixed(2)}</strong></div>`;
+  }
+  if(!isApi||pd.session_pct>0){
+    if(pd.session_pct!==undefined) h+=ubar('Session',pd.session_pct);
+  }
+  if(!isApi&&pd.weekly_pct!==undefined&&pd.weekly_pct>0){
+    h+=ubar('Weekly',pd.weekly_pct);
+  }
+  if(pd.simulated) h+=`<div class="uhint">⚠ Simulated data</div>`;
+  h+='</div>';
+  return h;
+}
+
+function ubar(label,pct){
+  const cls=barCls(pct);
+  return `<div class="urow">
+    <span class="ulabel">${esc(label)}</span>
+    <div class="utrack"><div class="ufill ${cls}" style="width:${Math.min(100,pct).toFixed(1)}%"></div></div>
+    <span class="upct">${pct.toFixed(0)}%</span>
+  </div>`;
+}
+
+function setupHtml(def,err){
+  let h='<div class="setup">';
+  if(err) h+=`<div class="setup-err">${esc(err)}</div>`;
+  if(def.type==='oauth'){
+    h+=`<div class="cmd-row">
+      <span class="cmd-prompt">$</span>
+      <span class="cmd-txt">${esc(def.cmd)}</span>
+      <button class="copy-btn" onclick="doCopy('${esc(def.cmd)}',this)">copy</button>
+    </div>`;
+    h+=`<div class="setup-hint">Run this command, then restart the daemon.</div>`;
+  } else if(def.type==='apikey'||def.type==='token'){
+    const saved=savedKeys.has(def.id);
+    h+=setupKeyFormHtml(def);
+    if(saved) h+=`<div class="setup-hint">Saved locally. Clear it here before replacing it.</div>`;
+    if(def.hint) h+=`<div class="setup-hint">${esc(def.hint)}</div>`;
+    if(def.env)  h+=`<div class="setup-hint">Or set env var: <span class="pill">${esc(def.env)}</span></div>`;
+  } else if(def.type==='install'){
+    h+=`<div class="setup-hint">${esc(def.hint||'')}</div>`;
+  }
+  h+='</div>';
+  return h;
+}
+
+function setupKeyFormHtml(def){
+  const lbl=def.type==='token'?'Session Token':'API Key';
+  const saved=savedKeys.has(def.id);
+  let h=`<div class="key-form">
+    <input class="key-in" id="kin-${def.id}" type="password" placeholder="${esc(lbl)}…" autocomplete="off">
+    <button class="btn" onclick="saveKey('${esc(def.id)}',this)" style="height:40px;padding:4px 16px;font-size:14px">Save</button>`;
+  if(saved){
+    h+=`<button class="btn-sm" onclick="clearKey('${esc(def.id)}',this)" style="height:40px">Clear</button>`;
+  }
+  h+='</div>';
+  return h;
+}
+
+// ── SPLASH animations ────────────────────────────────────────────────────
+function hexToRgb(hex){
+  if(!hex||hex==='#000000'||hex==='transparent') return [0,0,0];
+  const h=hex.replace('#','');
+  const r=parseInt(h.substr(0,2),16);
+  const g=parseInt(h.substr(2,2),16);
+  const b=parseInt(h.substr(4,2),16);
+  return [r,g,b];
+}
+
+function stopAnimLoops(){
+  animStoppers.forEach(stop=>stop());
+  animStoppers=[];
+}
+
+function startAnimCanvas(canvas, anim){
+  const ctx=canvas.getContext('2d');
+  const scale=canvas.width/20;
+  let frame=0, lastT=0, alive=true, rafId=null;
+  const palette=anim.palette.map(hexToRgb);
+
+  function draw(){
+    const cells=anim.frames[frame];
+    for(let y=0;y<20;y++){
+      for(let x=0;x<20;x++){
+        const ci=cells[y*20+x];
+        const [r,g,b]=palette[ci]||[0,0,0];
+        ctx.fillStyle=ci===0?'#201d1d':`rgb(${r},${g},${b})`;
+        ctx.fillRect(x*scale,y*scale,scale,scale);
+      }
+    }
+  }
+
+  function tick(ts){
+    if(!alive) return;
+    const hold=anim.holds[frame]||100;
+    if(ts-lastT>=hold){
+      draw();
+      frame=(frame+1)%anim.frames.length;
+      lastT=ts;
+    }
+    rafId=requestAnimationFrame(tick);
+  }
+
+  draw();
+  rafId=requestAnimationFrame(tick);
+  animStoppers.push(()=>{ alive=false; cancelAnimationFrame(rafId); });
+}
+
+async function loadAndRenderSplash(){
+  const host=document.getElementById('splash-grid');
+  if(!host) return;
+  try{
+    const r=await fetch('/api/animations');
+    if(!r.ok) throw 0;
+    const d=await r.json();
+    animDefs=d.animations||[];
+    if(!animDefs.length){
+      host.innerHTML='<div class="loading">No animations found.</div>';
+      return;
+    }
+    renderSplashGrid();
+  }catch(e){
+    host.innerHTML='<div class="loading">Could not load animations.</div>';
+  }
+}
+
+function renderSplashGrid(){
+  stopAnimLoops();
+  const host=document.getElementById('splash-grid');
+  if(!host||!animDefs.length) return;
+
+  const activeProv=S.selected_provider_ext||S.selected_provider;
+  const provDef=DMAP[activeProv]||{name:activeProv,color:'#9a9898'};
+  const provCfg=splashConfigs[activeProv];
+
+  host.innerHTML='';
+  for(let i=0;i<animDefs.length;i++){
+    const a=animDefs[i];
+    const isCurrent=provCfg&&provCfg.type==='claudepix'&&provCfg.name===a.name;
+
+    const card=document.createElement('div');
+    card.className='anim-card'+(isCurrent?' pinned':'');
+    card.dataset.name=a.name;
+
+    const canvas=document.createElement('canvas');
+    canvas.width=120; canvas.height=120;
+    card.appendChild(canvas);
+
+    const name=document.createElement('div');
+    name.className='anim-name';
+    name.textContent=a.name;
+    card.appendChild(name);
+
+    const cat=document.createElement('div');
+    cat.className='anim-cat';
+    cat.textContent=a.category;
+    card.appendChild(cat);
+
+    const btn=document.createElement('button');
+    btn.className='anim-set-btn'+(isCurrent?' current':'');
+    btn.textContent=isCurrent?'[active]':`Set · ${provDef.name}`;
+    if(!isCurrent) btn.addEventListener('click', ()=>{
+      saveSplashConfig(activeProv, {type:'claudepix', name:a.name});
+    });
+    card.appendChild(btn);
+
+    host.appendChild(card);
+    startAnimCanvas(canvas, a);
+  }
+
+  // "Auto" card
+  const isAuto=!provCfg;
+  const autoCard=document.createElement('div');
+  autoCard.className='anim-card'+(isAuto?' pinned':'');
+  autoCard.innerHTML=`
+    <div style="width:120px;height:120px;background:var(--card);border-radius:2px;display:flex;align-items:center;justify-content:center;color:var(--stone);font-size:12px;">auto</div>
+    <div class="anim-name">auto</div>
+    <div class="anim-cat">Rate-based</div>
+    <button class="anim-set-btn${isAuto?' current':''}" ${isAuto?'disabled':''} onclick="clearProviderSplash('${activeProv}')">${isAuto?'[active]':'Set · '+esc(provDef.name)}</button>
+  `;
+  host.appendChild(autoCard);
+}
+
+function updateSplashUI(){
+  // Re-render splash grid only if already loaded (no re-fetch)
+  if(animDefs.length) renderSplashGrid();
+}
+
+async function setSplash(name){
+  try{
+    const r=await fetch('/api/splash',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({name}),
+    });
+    if(!r.ok) throw 0;
+    splashPinned=name;
+    renderSplashGrid();
+  }catch(e){}
+}
+
+async function applyProviderSplash(provider, opts){
+  // shouldPin: true when this provider is the active display, or explicitly forced.
+  // For non-active providers we skip pushing/pinning to preserve the single PSRAM slot.
+  const forcePin = !!(opts && opts.forcePin);
+  const activeP = S.selected_provider_ext || S.selected_provider;
+  const shouldPin = forcePin || provider === activeP;
+  const cfg=splashConfigs[provider];
+  if(!cfg) return;
+  if(cfg.type==='claudepix'){
+    if(shouldPin) await setSplash(cfg.name);
+  } else if(cfg.type==='petdex'){
+    try{
+      const convR=await fetch('/api/petdex/convert',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({url:cfg.url,row:cfg.row,frames:cfg.frames,name:cfg.name,hold_ms:cfg.hold_ms}),
+      });
+      if(!convR.ok) return;
+      const payload=await convR.json();
+      payload.provider=provider;
+      const pushR=await fetch('/api/anim/custom',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+      if(pushR.ok && shouldPin) await setSplash(cfg.name);
+    }catch(e){console.warn('applyProviderSplash:',e);}
+  }
+}
+
+async function saveSplashConfig(provider, cfg){
+  splashConfigs[provider]=cfg;
+  try{
+    await fetch('/api/splash-configs',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(splashConfigs),
+    });
+  }catch(e){}
+  await applyProviderSplash(provider);
+  renderSplashGrid();
+}
+
+window.clearProviderSplash=async function(provider){
+  delete splashConfigs[provider];
+  try{
+    await fetch('/api/splash-configs',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(splashConfigs),
+    });
+  }catch(e){}
+  await setSplash('');
+  renderSplashGrid();
+};
+
+// ── Companions ───────────────────────────────────────────────────────────
+function renderCompanions(){
+  const host=document.getElementById('companions-list');
+  if(!host) return;
+  let h='';
+  for(const def of DEFS){
+    const pet=normPet(S.pets[def.id]);
+    h+=`<div class="companion-row">`;
+    h+=`<div class="companion-prov"><div class="companion-dot" style="background:${def.color}"></div><span class="companion-pname">${esc(def.name)}</span></div>`;
+    if(pet.assigned){
+      if(pet.spritesheetPath){
+        const sy=pet.stateRow*-208, sx=pet.stateFrames*-192;
+        h+=`<div class="companion-sprite-wrap"><div class="companion-sprite" style="background-image:url('${esc(pet.spritesheetPath)}');--sy:${sy}px;--sx:${sx}px;--sd:${pet.stateDur}ms;--sf:${pet.stateFrames}"></div></div>`;
+      } else {
+        const img=pet.previewImagePath||'';
+        if(img) h+=`<img class="companion-img" src="${esc(img)}" alt="" loading="lazy">`;
+        else    h+=`<div class="companion-img empty"></div>`;
+      }
+      const stateLbl = pet.stateId && pet.stateId!=='idle' ? ` · ${pet.stateId}` : '';
+      h+=`<div class="companion-info"><div class="companion-cname">${esc(pet.displayName)}</div><div class="companion-slug">${esc(pet.slug||pet.id)}${stateLbl}</div></div>`;
+      h+=`<button class="btn-ghost" onclick="clearPet('${esc(def.id)}')">clear</button>`;
+    } else {
+      h+=`<span class="companion-empty">No companion assigned</span>`;
+    }
+    h+='</div>';
+  }
+  host.innerHTML=h;
+}
+
+// ── Display config ────────────────────────────────────────────────────────
+function renderDisplay(){
+  const host=document.getElementById('display-cfg');
+  if(!host) return;
+  let h='';
+  for(const def of manageableProviders()){
+    h+=cfgToggle(`Show ${def.name} on device`, `cfg-${def.id}`, providerVisible(def.id), `toggleProviderVisibility('${def.id}',this.checked)`);
+  }
+
+  const okp=live.filter(p=>p.ok && providerVisible(p.provider));
+  if(okp.length){
+    h+=`<div class="cfg-row" style="flex-direction:column;align-items:flex-start;gap:10px;padding-top:14px">`;
+    h+=`<span class="cfg-lbl">Active display</span>`;
+    h+=`<div class="rpg">`;
+    const cur=S.selected_provider_ext||S.selected_provider;
+    for(const pd of okp){
+      const def=DMAP[pd.provider]||{name:pd.provider,color:'#9a9898'};
+      const sel=cur===pd.provider;
+      h+=`<label class="rp${sel?' sel':''}" id="rp-${pd.provider}">
+        <input type="radio" name="adisp" value="${pd.provider}" ${sel?'checked':''} onchange="selDisp('${pd.provider}')">
+        <span style="width:6px;height:6px;border-radius:50%;background:${def.color};display:inline-block"></span>
+        ${esc(def.name||pd.provider)}
+      </label>`;
+    }
+    h+=`</div></div>`;
+  }
+  host.innerHTML=h;
+}
+
+function cfgToggle(label,id,checked,onchange){
+  return `<div class="cfg-row">
+    <span class="cfg-lbl">${esc(label)}</span>
+    <label class="tgl">
+      <input type="checkbox" id="${id}" ${checked?'checked':''} onchange="${onchange}">
+      <span class="tgl-track"></span>
+    </label>
+  </div>`;
+}
+
+// ── Actions ──────────────────────────────────────────────────────────────
+window.toggleProviderVisibility=function(name,v){
+  if(name==='claude'||name==='codex') S[name]=v;
+  else S.provider_visibility[name]=v;
+  ensureVisibleSelection();
+  renderDisplay();
+  flush();
+};
+
+window.selDisp=async function(name){
+  S.selected_provider=(name==='codex')?'codex':'claude';
+  S.selected_provider_ext=name;
+  document.querySelectorAll('.rp').forEach(el=>{
+    const inp=el.querySelector('input');
+    if(inp) el.classList.toggle('sel',inp.value===name);
+  });
+  if(splashConfigs[name]) await applyProviderSplash(name, {forcePin:true});
+  else await setSplash('');
+  renderSplashGrid();
+  flush();
+};
+
+window.clearPet=async function(provider){
+  S.pets[provider]=emptyPet();
+  renderCompanions();
+  await flush();
+};
+
+window.assignPetState=async function(petIdx, stateInfo){
+  const pet=sres[petIdx];
+  if(!pet) return;
+  const norm=normPet(pet);
+  norm.stateId=stateInfo.id;
+  norm.stateRow=stateInfo.row;
+  norm.stateFrames=stateInfo.frames;
+  norm.stateDur=stateInfo.dur;
+
+  const provider=petTargetProvider;
+  S.pets[provider]={...norm};
+  renderCompanions();
+  renderSearch();
+
+  // Save as that provider's permanent splash config and push to device
+  const customName=`${norm.slug||norm.id}-${stateInfo.id}`;
+  const cfg={
+    type:'petdex',
+    url:norm.spritesheetPath,
+    row:stateInfo.row,
+    frames:stateInfo.frames,
+    hold_ms:Math.round(stateInfo.dur/stateInfo.frames),
+    name:customName,
+  };
+  await saveSplashConfig(provider, cfg);
+  await flush();
+};
+
+window.doCopy=function(text,btn){
+  navigator.clipboard.writeText(text).then(()=>{
+    const o=btn.textContent; btn.textContent='copied';
+    setTimeout(()=>btn.textContent=o,1500);
+  }).catch(()=>{});
+};
+
+window.saveKey=async function(provider,btn){
+  const inp=document.getElementById('kin-'+provider);
+  if(!inp) return;
+  const key=inp.value.trim();
+  if(!key) return;
+  btn.disabled=true;
+  try{
+    const r=await fetch('/api/auth/apikey',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({provider,key}),
+    });
+    const data=await r.json();
+    if(!r.ok) throw new Error(data.error||'save failed');
+    inp.value='';
+    savedKeys.add(provider);
+    renderProviders();
+    renderDisplay();
+    const hint=inp.closest('.setup')?.querySelector('.setup-hint');
+    if(hint){
+      const orig=hint.textContent;
+      hint.textContent='[+] Saved. Daemon picks it up on next poll.';
+      hint.style.color='var(--ok)';
+      setTimeout(()=>{ hint.textContent=orig; hint.style.color=''; },3000);
+    }
+    setTimeout(load,2000);
+  }catch(e){
+    const hint=inp.closest('.setup')?.querySelector('.setup-hint');
+    if(hint){ hint.textContent='[x] Error: '+e.message; hint.style.color='var(--danger)'; }
+  }finally{ btn.disabled=false; }
+};
+
+window.clearKey=async function(provider,btn){
+  btn.disabled=true;
+  try{
+    const r=await fetch('/api/auth/apikey?provider='+encodeURIComponent(provider),{method:'DELETE'});
+    const data=await r.json();
+    if(!r.ok) throw new Error(data.error||'clear failed');
+    savedKeys.delete(provider);
+    renderProviders();
+    renderDisplay();
+    setTimeout(load,1000);
+  }catch(e){
+    const root=btn.closest('.setup');
+    const hint=root?.querySelector('.setup-hint');
+    if(hint){ hint.textContent='[x] Error: '+e.message; hint.style.color='var(--danger)'; }
+  }finally{ btn.disabled=false; }
+};
+
+// ── PetDex search ─────────────────────────────────────────────────────────
+document.getElementById('pform').addEventListener('submit', async function(e){
+  e.preventDefault();
+  const q=document.getElementById('psq').value.trim();
+  const ss=document.getElementById('pss');
+  const pr=document.getElementById('pres');
+  if(!q){ ss.textContent='Enter a search term.'; return; }
+  ss.textContent='Searching…';
+  pr.innerHTML='';
+  try{
+    const r=await fetch('/api/petdex/search?q='+encodeURIComponent(q)+'&limit=8');
+    const d=await r.json();
+    if(!r.ok) throw new Error(d.error||'failed');
+    sres=Array.isArray(d.pets)?d.pets.map(normPet):[];
+    ss.textContent=`${d.total||sres.length} result${sres.length===1?'':'s'} for "${esc(q)}"`;
+    renderSearch();
+  }catch(e2){
+    sres=[]; ss.textContent='Search unavailable.'; pr.innerHTML='';
+  }
+});
+
+function getAssignablePetProviders(){
+  const result=['claude'];
+  for(const pd of live){
+    if(pd.ok && pd.provider!=='claude' && !result.includes(pd.provider)) result.push(pd.provider);
+  }
+  return result;
+}
+
+function renderPetTargetPicker(){
+  const host=document.getElementById('pet-target-picker');
+  if(!host) return;
+  const provs=getAssignablePetProviders();
+  if(!provs.includes(petTargetProvider)) petTargetProvider='claude';
+  host.innerHTML=provs.map(prov=>{
+    const def=DMAP[prov]||{name:prov,color:'#9a9898'};
+    const sel=petTargetProvider===prov;
+    return `<label class="rp${sel?' sel':''}" onclick="setPetTarget('${esc(prov)}')">
+      <span style="width:6px;height:6px;border-radius:50%;background:${def.color};display:inline-block"></span>
+      ${esc(def.name||prov)}
+    </label>`;
+  }).join('');
+}
+
+window.setPetTarget=function(prov){
+  petTargetProvider=prov;
+  renderPetTargetPicker();
+  renderSearch();
+};
+
+function activeStateForPet(petSlug){
+  const pet=normPet(S.pets[petTargetProvider]);
+  if(pet.assigned && pet.slug===petSlug) return pet.stateId;
+  return null;
+}
+
+function renderSearch(){
+  const host=document.getElementById('pres');
+  if(!host) return;
+  if(!sres.length){ host.innerHTML='<div class="pdex-status">No companions found.</div>'; return; }
+  host.innerHTML='';
+
+  for(let i=0;i<sres.length;i++){
+    const p=sres[i];
+    const activeState=activeStateForPet(p.slug||p.id);
+    const card=document.createElement('div');
+    card.className='pet-card';
+
+    // Header: name + desc + vibes
+    const hd=document.createElement('div');
+    hd.innerHTML=`
+      <div class="pet-card-hd">
+        <span class="pet-mname">${esc(p.displayName||p.slug||p.id)}</span>
+        ${p.vibes&&p.vibes.length?`<div class="pet-mvibes">${p.vibes.slice(0,3).map(v=>`<span>${esc(v)}</span>`).join('')}</div>`:''}
+      </div>
+      ${p.description?`<div class="pet-mdesc">${esc(p.description)}</div>`:''}
+    `;
+    card.appendChild(hd);
+
+    // State cards grid
+    const statesRow=document.createElement('div');
+    statesRow.className='pet-states';
+
+    for(const st of PET_STATES){
+      const isCurrent=activeState===st.id;
+      const sc=document.createElement('div');
+      sc.className='pet-state-card'+(isCurrent?' active':'');
+
+      const wrap=document.createElement('div');
+      wrap.className='pet-state-wrap';
+
+      const sprite=document.createElement('div');
+      sprite.className='pet-state-sprite';
+      sprite.style.backgroundImage=`url("${p.spritesheetPath}")`;
+      sprite.style.setProperty('--sy', `${st.row * -208}px`);
+      sprite.style.setProperty('--sx', `${st.frames * -192}px`);
+      sprite.style.setProperty('--sd', `${st.dur}ms`);
+      sprite.style.setProperty('--sf', String(st.frames));
+      wrap.appendChild(sprite);
+      sc.appendChild(wrap);
+
+      const lbl=document.createElement('div');
+      lbl.className='pet-state-lbl';
+      lbl.textContent=st.label;
+      sc.appendChild(lbl);
+
+      const btn=document.createElement('button');
+      btn.className='pet-state-btn'+(isCurrent?' current':'');
+      const apDef=DMAP[petTargetProvider]||{name:petTargetProvider};
+      btn.textContent=isCurrent?'[active]':`Set · ${apDef.name}`;
+      if(!isCurrent) btn.addEventListener('click', ()=>assignPetState(i, st));
+      sc.appendChild(btn);
+
+      statesRow.appendChild(sc);
+    }
+
+    card.appendChild(statesRow);
+    host.appendChild(card);
+  }
+}
+
+// ── Ticker ───────────────────────────────────────────────────────────────
+function tick(){ const el=document.getElementById('d-ts'); if(el) el.textContent=ago(lastTs); }
+
+// ── Init ─────────────────────────────────────────────────────────────────
+load();
+loadAndRenderSplash();
+setInterval(load, 30000);
+setInterval(tick, 5000);
+
+})();
+</script>
+</body>
+</html>

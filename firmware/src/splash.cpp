@@ -5,6 +5,7 @@
 #include <Arduino.h>
 #include <string.h>
 #include <esp_heap_caps.h>
+#include "data.h"
 
 // 20x20 grid scaled 24x to fill 480x480
 #define GRID         20
@@ -27,6 +28,101 @@ static uint16_t cur_frame = 0;
 static uint32_t frame_started_ms = 0;
 static uint32_t last_pick_ms = 0;
 static bool active = false;
+static char s_pinned_name[64] = "";
+
+// ── Custom (runtime-loaded) animation ────────────────────────────────────────
+#define CUSTOM_MAX_FRAMES 8
+
+// Claude slot — integrated into get_anim() / splash_tick() via s_custom_def
+static bool     s_custom_valid = false;
+static char     s_custom_name[64]     = "";
+static char     s_custom_cat[32]      = "petdex";
+static char     s_custom_provider_name[PROVIDER_NAME_LEN] = "";
+static uint16_t s_custom_pal[10]   = {};
+static uint8_t  s_custom_frames[CUSTOM_MAX_FRAMES][400] = {};
+static uint16_t s_custom_holds[CUSTOM_MAX_FRAMES] = {};
+static uint16_t s_custom_fc = 0;
+static splash_anim_def_t s_custom_def = {};
+
+// Codex slot — served by splash_custom_* accessors (used by codex_splash.cpp)
+static bool     s_codex_valid = false;
+static char     s_codex_name[64]  = "";
+static char     s_codex_cat[32]   = "petdex";
+static uint16_t s_codex_pal[10]   = {};
+static uint8_t  s_codex_frames[CUSTOM_MAX_FRAMES][400] = {};
+static uint16_t s_codex_holds[CUSTOM_MAX_FRAMES] = {};
+static uint16_t s_codex_fc = 0;
+
+static const splash_anim_def_t* get_anim(int idx) {
+    if (idx >= 0 && idx < SPLASH_ANIM_COUNT) return &splash_anims[idx];
+    if (s_custom_valid && idx == SPLASH_ANIM_COUNT) return &s_custom_def;
+    return nullptr;
+}
+
+bool splash_set_custom(const char* name, const char* cat, const char* provider,
+                       const uint16_t pal[10],
+                       const char* frames_str, uint16_t fc,
+                       const uint16_t* holds) {
+    if (!name || !frames_str || fc == 0 || fc > CUSTOM_MAX_FRAMES) return false;
+    const char* prov = provider ? provider : "claude";
+    int slen = (int)strlen(frames_str);
+
+    if (strcmp(prov, "codex") == 0) {
+        strlcpy(s_codex_name, name, sizeof(s_codex_name));
+        strlcpy(s_codex_cat, cat ? cat : "petdex", sizeof(s_codex_cat));
+        memcpy(s_codex_pal, pal, 10 * sizeof(uint16_t));
+        s_codex_fc = fc;
+        for (int f = 0; f < fc; f++) {
+            for (int c = 0; c < 400; c++) {
+                int i = f * 400 + c;
+                s_codex_frames[f][c] = (i < slen) ? (uint8_t)(frames_str[i] - '0') : 0;
+            }
+            s_codex_holds[f] = holds ? holds[f] : 150;
+        }
+        s_codex_valid = true;
+        Serial.printf("splash: codex custom '%s' loaded (%d frames)\n", name, fc);
+    } else {
+        strlcpy(s_custom_name, name, sizeof(s_custom_name));
+        strlcpy(s_custom_cat, cat ? cat : "petdex", sizeof(s_custom_cat));
+        strlcpy(s_custom_provider_name, prov, sizeof(s_custom_provider_name));
+        memcpy(s_custom_pal, pal, 10 * sizeof(uint16_t));
+        s_custom_fc = fc;
+        for (int f = 0; f < fc; f++) {
+            for (int c = 0; c < 400; c++) {
+                int i = f * 400 + c;
+                s_custom_frames[f][c] = (i < slen) ? (uint8_t)(frames_str[i] - '0') : 0;
+            }
+            s_custom_holds[f] = holds ? holds[f] : 150;
+        }
+        s_custom_def.name        = s_custom_name;
+        s_custom_def.category    = s_custom_cat;
+        s_custom_def.frame_count = s_custom_fc;
+        s_custom_def.palette     = s_custom_pal;
+        s_custom_def.frames      = (const uint8_t (*)[400])s_custom_frames;
+        s_custom_def.holds       = s_custom_holds;
+        s_custom_valid = true;
+        Serial.printf("splash: %s custom '%s' loaded (%d frames)\n", prov, name, fc);
+    }
+    return true;
+}
+
+bool splash_has_custom(void) { return s_custom_valid || s_codex_valid; }
+bool splash_has_custom_for(const char* provider) {
+    if (!provider) return false;
+    if (strcmp(provider, "codex") == 0) return s_codex_valid;
+    return s_custom_valid && strcmp(s_custom_provider_name, provider) == 0;
+}
+const char* splash_custom_provider(void) { return s_custom_provider_name; }
+const uint8_t* splash_custom_frame_pixels(int frame_idx) {
+    if (!s_codex_valid || frame_idx < 0 || frame_idx >= (int)s_codex_fc) return nullptr;
+    return s_codex_frames[frame_idx];
+}
+const uint16_t* splash_custom_palette(void) { return s_codex_valid ? s_codex_pal : nullptr; }
+uint16_t splash_custom_frame_count(void) { return s_codex_fc; }
+uint16_t splash_custom_hold_ms(int frame_idx) {
+    if (!s_codex_valid || frame_idx < 0 || frame_idx >= (int)s_codex_fc) return 150;
+    return s_codex_holds[frame_idx];
+}
 
 // While splash is showing, auto-cycle to the next animation in the current
 // rate-driven group every this many ms.
@@ -137,15 +233,15 @@ void splash_init(lv_obj_t *parent) {
 }
 
 void splash_tick(void) {
-    if (!active || SPLASH_ANIM_COUNT == 0) return;
+    int total = SPLASH_ANIM_COUNT + (s_custom_valid ? 1 : 0);
+    if (!active || total == 0) return;
 
-    // Auto-rotate to the next animation in the current group.
     if (millis() - last_pick_ms >= SPLASH_ROTATE_INTERVAL_MS) {
         splash_pick_for_current_rate();
     }
 
-    const splash_anim_def_t *a = &splash_anims[cur_anim];
-    if (a->frame_count == 0) return;
+    const splash_anim_def_t *a = get_anim(cur_anim);
+    if (!a || a->frame_count == 0) return;
 
     uint16_t hold = a->holds[cur_frame];
     if (millis() - frame_started_ms >= hold) {
@@ -156,17 +252,47 @@ void splash_tick(void) {
 }
 
 void splash_next(void) {
-    if (SPLASH_ANIM_COUNT == 0) return;
-    cur_anim = (cur_anim + 1) % SPLASH_ANIM_COUNT;
+    int total = SPLASH_ANIM_COUNT + (s_custom_valid ? 1 : 0);
+    if (total == 0) return;
+    cur_anim = (cur_anim + 1) % total;
     cur_frame = 0;
     frame_started_ms = millis();
     last_pick_ms = frame_started_ms;
-    const splash_anim_def_t *a = &splash_anims[cur_anim];
-    render_frame(a->frames[0], a->palette);
-    Serial.printf("splash: -> %s\n", a->name);
+    const splash_anim_def_t *a = get_anim(cur_anim);
+    if (a) render_frame(a->frames[0], a->palette);
+    Serial.printf("splash: -> %s\n", a ? a->name : "?");
 }
 
 void splash_pick_for_current_rate(void) {
+    if (SPLASH_ANIM_COUNT == 0 && !s_custom_valid) return;
+
+    if (s_pinned_name[0] != '\0') {
+        // Check custom anim first
+        if (s_custom_valid && strcmp(s_custom_name, s_pinned_name) == 0) {
+            cur_anim = (uint16_t)SPLASH_ANIM_COUNT;
+            cur_frame = 0;
+            frame_started_ms = millis();
+            last_pick_ms = frame_started_ms;
+            if (active) render_frame(s_custom_def.frames[0], s_custom_def.palette);
+            return;
+        }
+        for (int i = 0; i < SPLASH_ANIM_COUNT; i++) {
+            if (strcmp(splash_anims[i].name, s_pinned_name) == 0) {
+                cur_anim = (uint16_t)i;
+                cur_frame = 0;
+                frame_started_ms = millis();
+                last_pick_ms = frame_started_ms;
+                if (active) render_frame(splash_anims[i].frames[0], splash_anims[i].palette);
+                return;
+            }
+        }
+        Serial.printf("splash: pinned '%s' not found, clearing pin\n", s_pinned_name);
+        s_pinned_name[0] = '\0';
+        extern void web_server_clear_splash_pin(void);
+        web_server_clear_splash_pin();
+        return;
+    }
+
     if (SPLASH_ANIM_COUNT == 0) return;
     int g = usage_rate_group();
     if (g < 0 || g >= GROUP_COUNT) g = 0;
@@ -183,6 +309,51 @@ void splash_pick_for_current_rate(void) {
     last_pick_ms = frame_started_ms;
     const splash_anim_def_t *a = &splash_anims[cur_anim];
     render_frame(a->frames[0], a->palette);
+}
+
+void splash_pin_by_name(const char* name) {
+    if (!name || name[0] == '\0') {
+        s_pinned_name[0] = '\0';
+        Serial.println("splash: unpinned (auto mode)");
+        return;
+    }
+    strlcpy(s_pinned_name, name, sizeof(s_pinned_name));
+    // Check custom anim
+    if (s_custom_valid && strcmp(s_custom_name, name) == 0) {
+        cur_anim = (uint16_t)SPLASH_ANIM_COUNT;
+        cur_frame = 0;
+        frame_started_ms = millis();
+        last_pick_ms = frame_started_ms;
+        if (active) render_frame(s_custom_def.frames[0], s_custom_def.palette);
+        Serial.printf("splash: pinned custom -> %s\n", name);
+        return;
+    }
+    for (int i = 0; i < SPLASH_ANIM_COUNT; i++) {
+        if (strcmp(splash_anims[i].name, name) == 0) {
+            cur_anim = (uint16_t)i;
+            cur_frame = 0;
+            frame_started_ms = millis();
+            last_pick_ms = frame_started_ms;
+            if (active) render_frame(splash_anims[i].frames[0], splash_anims[i].palette);
+            Serial.printf("splash: pinned -> %s\n", name);
+            return;
+        }
+    }
+    Serial.printf("splash: unknown anim '%s'\n", name);
+}
+
+const char* splash_get_pinned_name(void) { return s_pinned_name; }
+
+int splash_anim_count(void) { return SPLASH_ANIM_COUNT + (s_custom_valid ? 1 : 0); }
+
+const char* splash_anim_name(int idx) {
+    const splash_anim_def_t* a = get_anim(idx);
+    return a ? a->name : nullptr;
+}
+
+const char* splash_anim_category(int idx) {
+    const splash_anim_def_t* a = get_anim(idx);
+    return a ? a->category : nullptr;
 }
 
 bool splash_is_active(void) { return active; }

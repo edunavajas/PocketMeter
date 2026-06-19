@@ -48,6 +48,11 @@ static lv_obj_t* lbl_weekly_pct;
 static lv_obj_t* lbl_weekly_label;
 static lv_obj_t* lbl_weekly_reset;
 static lv_obj_t* lbl_anim;
+static lv_obj_t* panel_session;
+static lv_obj_t* panel_weekly;
+static lv_obj_t* panel_credit;
+static lv_obj_t* lbl_credit_balance;
+static lv_obj_t* lbl_credit_plan;
 
 // ---- Codex screen widgets ----
 static lv_obj_t* codex_container;
@@ -59,10 +64,31 @@ static lv_obj_t* lbl_codex_weekly_pct;
 static lv_obj_t* lbl_codex_weekly_label;
 static lv_obj_t* bar_codex_weekly;
 static lv_obj_t* lbl_codex_weekly_reset;
-static lv_obj_t* lbl_codex_credits;
 static lv_obj_t* codex_icon_img;
 static lv_image_dsc_t codex_icon_dsc;
 static bool codex_available = false;
+static lv_obj_t* panel_codex_session;
+static lv_obj_t* panel_codex_weekly;
+static lv_obj_t* panel_codex_credit;
+static lv_obj_t* lbl_codex_credit_balance;
+static lv_obj_t* lbl_codex_credit_plan;
+
+// ---- Generic provider screen widgets ----
+static lv_obj_t* provider_container;
+static lv_obj_t* lbl_provider_title;
+static lv_obj_t* lbl_provider_session_pct;
+static lv_obj_t* bar_provider_session;
+static lv_obj_t* lbl_provider_session_reset;
+static lv_obj_t* lbl_provider_weekly_pct;
+static lv_obj_t* bar_provider_weekly;
+static lv_obj_t* lbl_provider_weekly_reset;
+static bool      generic_provider_available = false;
+static ProviderData generic_provider_data   = {};
+static lv_obj_t* panel_provider_session;
+static lv_obj_t* panel_provider_weekly;
+static lv_obj_t* panel_provider_credit;
+static lv_obj_t* lbl_provider_credit_balance;
+static lv_obj_t* lbl_provider_credit_plan;
 
 // ---- Network screen widgets ----
 static lv_obj_t* net_container;
@@ -140,6 +166,12 @@ static const char* const anim_messages[] = {
 static lv_color_t pct_color(float pct) {
     if (pct >= 80.0f) return COL_RED;
     if (pct >= 50.0f) return COL_AMBER;
+    return COL_GREEN;
+}
+
+static lv_color_t status_color(const char* status) {
+    if (strcmp(status, "limited") == 0) return COL_RED;
+    if (strcmp(status, "approaching") == 0) return COL_AMBER;
     return COL_GREEN;
 }
 
@@ -244,9 +276,9 @@ static void init_battery_icons(void) {
 // One Session/Weekly panel: big % label, pill on the right, bar, reset label.
 // Pill y=1: symmetric inside the panel — panel-outer-top → pill-top equals
 // pill-bottom → bar-top (pill height 42 + panel pad_top 12 + bar y=56).
-static void make_usage_panel(lv_obj_t* parent, int y, const char* pill_text,
-                             lv_obj_t** out_pct, lv_obj_t** out_pill,
-                             lv_obj_t** out_bar, lv_obj_t** out_reset) {
+static lv_obj_t* make_usage_panel(lv_obj_t* parent, int y, const char* pill_text,
+                                  lv_obj_t** out_pct, lv_obj_t** out_pill,
+                                  lv_obj_t** out_bar, lv_obj_t** out_reset) {
     lv_obj_t* panel = make_panel(parent, MARGIN, y, CONTENT_W, PANEL_H);
 
     *out_pct = lv_label_create(panel);
@@ -265,6 +297,37 @@ static void make_usage_panel(lv_obj_t* parent, int y, const char* pill_text,
     lv_obj_set_style_text_font(*out_reset, &font_styrene_28, 0);
     lv_obj_set_style_text_color(*out_reset, COL_DIM, 0);
     lv_obj_set_pos(*out_reset, 0, 94);
+
+    return panel;
+}
+
+static lv_obj_t* make_credit_panel(lv_obj_t* parent, int y, int h,
+                                   lv_obj_t** out_balance, lv_obj_t** out_plan) {
+    lv_obj_t* panel = make_panel(parent, MARGIN, y, CONTENT_W, h);
+
+    *out_balance = lv_label_create(panel);
+    lv_label_set_text(*out_balance, "");
+    lv_obj_set_style_text_font(*out_balance, &font_styrene_48, 0);
+    lv_obj_set_style_text_color(*out_balance, COL_TEXT, 0);
+    lv_obj_align(*out_balance, LV_ALIGN_TOP_MID, 0, 40);
+
+    *out_plan = make_pill(panel, "");
+    lv_obj_align(*out_plan, LV_ALIGN_TOP_MID, 0, 110);
+
+    return panel;
+}
+
+static void set_credit_mode(lv_obj_t* session_panel, lv_obj_t* weekly_panel,
+                            lv_obj_t* credit_panel, bool credit_mode) {
+    if (credit_mode) {
+        lv_obj_add_flag(session_panel, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(weekly_panel, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(credit_panel, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_clear_flag(session_panel, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(weekly_panel, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(credit_panel, LV_OBJ_FLAG_HIDDEN);
+    }
 }
 
 static void init_usage_screen(lv_obj_t* scr) {
@@ -283,12 +346,16 @@ static void init_usage_screen(lv_obj_t* scr) {
     lv_obj_set_style_text_color(lbl_title, COL_TEXT, 0);
     lv_obj_align(lbl_title, LV_ALIGN_TOP_MID, 16, TITLE_Y);
 
-    make_usage_panel(usage_container, CONTENT_Y, "Current",
-                     &lbl_session_pct, &lbl_session_label,
-                     &bar_session, &lbl_session_reset);
-    make_usage_panel(usage_container, CONTENT_Y + PANEL_H + PANEL_GAP, "Weekly",
-                     &lbl_weekly_pct, &lbl_weekly_label,
-                     &bar_weekly, &lbl_weekly_reset);
+    panel_session = make_usage_panel(usage_container, CONTENT_Y, "Current",
+                                     &lbl_session_pct, &lbl_session_label,
+                                     &bar_session, &lbl_session_reset);
+    panel_weekly = make_usage_panel(usage_container, CONTENT_Y + PANEL_H + PANEL_GAP, "Weekly",
+                                    &lbl_weekly_pct, &lbl_weekly_label,
+                                    &bar_weekly, &lbl_weekly_reset);
+
+    panel_credit = make_credit_panel(usage_container, CONTENT_Y, 316,
+                                     &lbl_credit_balance, &lbl_credit_plan);
+    lv_obj_add_flag(panel_credit, LV_OBJ_FLAG_HIDDEN);
 
     lbl_anim = lv_label_create(usage_container);
     lv_label_set_text(lbl_anim, "");
@@ -317,23 +384,21 @@ static void init_codex_screen(lv_obj_t* scr) {
     lv_obj_align(lbl_title, LV_ALIGN_TOP_MID, 16, TITLE_Y);
 
     // Session/Weekly panels (same layout as usage screen)
-    make_usage_panel(codex_container, CONTENT_Y, "Current",
-                     &lbl_codex_session_pct, &lbl_codex_session_label,
-                     &bar_codex_session, &lbl_codex_session_reset);
-    make_usage_panel(codex_container, CONTENT_Y + PANEL_H + PANEL_GAP, "Weekly",
-                     &lbl_codex_weekly_pct, &lbl_codex_weekly_label,
-                     &bar_codex_weekly, &lbl_codex_weekly_reset);
+    panel_codex_session = make_usage_panel(codex_container, CONTENT_Y, "Current",
+                                           &lbl_codex_session_pct, &lbl_codex_session_label,
+                                           &bar_codex_session, &lbl_codex_session_reset);
+    panel_codex_weekly = make_usage_panel(codex_container, CONTENT_Y + PANEL_H + PANEL_GAP, "Weekly",
+                                          &lbl_codex_weekly_pct, &lbl_codex_weekly_label,
+                                          &bar_codex_weekly, &lbl_codex_weekly_reset);
 
     // Override bar indicator color to Codex teal
     lv_obj_set_style_bg_color(bar_codex_session, THEME_CODEX, LV_PART_INDICATOR);
     lv_obj_set_style_bg_color(bar_codex_weekly,  THEME_CODEX, LV_PART_INDICATOR);
 
-    // Credits label at bottom
-    lbl_codex_credits = lv_label_create(codex_container);
-    lv_label_set_text(lbl_codex_credits, "");
-    lv_obj_set_style_text_font(lbl_codex_credits, &font_styrene_28, 0);
-    lv_obj_set_style_text_color(lbl_codex_credits, THEME_CODEX, 0);
-    lv_obj_align(lbl_codex_credits, LV_ALIGN_BOTTOM_MID, 0, -15);
+    // Credit panel
+    panel_codex_credit = make_credit_panel(codex_container, CONTENT_Y, 316,
+                                           &lbl_codex_credit_balance, &lbl_codex_credit_plan);
+    lv_obj_add_flag(panel_codex_credit, LV_OBJ_FLAG_HIDDEN);
 
     // Cloud icon (top-left, same position as logo — logo is hidden on SCREEN_CODEX)
     init_icon_dsc_rgb565a8(&codex_icon_dsc, CODEX_ICON_W, CODEX_ICON_H, codex_icon_data);
@@ -343,6 +408,106 @@ static void init_codex_screen(lv_obj_t* scr) {
     lv_obj_add_flag(codex_icon_img, LV_OBJ_FLAG_HIDDEN);
 
     lv_obj_add_flag(codex_container, LV_OBJ_FLAG_HIDDEN);
+}
+
+// ======== Generic Provider Screen (480x480) ========
+// Reuses the same layout as the Claude screen but without the animation bar.
+// Content is populated via ui_set_generic_provider().
+
+static lv_color_t provider_accent_color(const char* name) {
+    if (strcmp(name, "gemini")   == 0) return lv_color_hex(0xAB87EA);
+    if (strcmp(name, "copilot")  == 0) return lv_color_hex(0x0078D4);
+    if (strcmp(name, "grok")     == 0) return lv_color_hex(0xE7E7E7);
+    if (strcmp(name, "openai")   == 0) return lv_color_hex(0x74AA9C);
+    if (strcmp(name, "deepseek") == 0) return lv_color_hex(0x4D6BFE);
+    if (strcmp(name, "windsurf") == 0) return lv_color_hex(0x00BFA5);
+    if (strcmp(name, "cursor")   == 0) return lv_color_hex(0x00BCA5);
+    if (strcmp(name, "kimi")     == 0) return lv_color_hex(0xFF6B35);
+    return lv_color_hex(0x7B8FA1);
+}
+
+static const char* provider_display_name(const char* name) {
+    if (strcmp(name, "gemini")   == 0) return "Gemini";
+    if (strcmp(name, "copilot")  == 0) return "Copilot";
+    if (strcmp(name, "grok")     == 0) return "Grok";
+    if (strcmp(name, "openai")   == 0) return "OpenAI";
+    if (strcmp(name, "deepseek") == 0) return "DeepSeek";
+    if (strcmp(name, "windsurf") == 0) return "Windsurf";
+    if (strcmp(name, "cursor")   == 0) return "Cursor";
+    if (strcmp(name, "kimi")     == 0) return "Kimi";
+    return name;
+}
+
+static void init_provider_screen(lv_obj_t* scr) {
+    provider_container = lv_obj_create(scr);
+    lv_obj_set_size(provider_container, SCR_W, SCR_H);
+    lv_obj_set_pos(provider_container, 0, 0);
+    lv_obj_set_style_bg_color(provider_container, COL_BG, 0);
+    lv_obj_set_style_bg_opa(provider_container, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(provider_container, 0, 0);
+    lv_obj_set_style_pad_all(provider_container, 0, 0);
+    lv_obj_clear_flag(provider_container, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(provider_container, global_click_cb, LV_EVENT_CLICKED, NULL);
+
+    // Title — filled in by ui_set_generic_provider
+    lbl_provider_title = lv_label_create(provider_container);
+    lv_label_set_text(lbl_provider_title, "Provider");
+    lv_obj_set_style_text_font(lbl_provider_title, &font_tiempos_56, 0);
+    lv_obj_set_style_text_color(lbl_provider_title, COL_TEXT, 0);
+    lv_obj_align(lbl_provider_title, LV_ALIGN_TOP_MID, 16, TITLE_Y);
+
+    // Session panel
+    panel_provider_session = make_panel(provider_container, MARGIN, CONTENT_Y, CONTENT_W, 130);
+
+    lbl_provider_session_pct = lv_label_create(panel_provider_session);
+    lv_label_set_text(lbl_provider_session_pct, "0%");
+    lv_obj_set_style_text_font(lbl_provider_session_pct, &font_styrene_48, 0);
+    lv_obj_set_style_text_color(lbl_provider_session_pct, COL_GREEN, 0);
+    lv_obj_set_pos(lbl_provider_session_pct, 0, 0);
+
+    lv_obj_t* lbl_prov_sess_lbl = lv_label_create(panel_provider_session);
+    lv_label_set_text(lbl_prov_sess_lbl, "Session");
+    lv_obj_set_style_text_font(lbl_prov_sess_lbl, &font_styrene_20, 0);
+    lv_obj_set_style_text_color(lbl_prov_sess_lbl, COL_DIM, 0);
+    lv_obj_set_pos(lbl_prov_sess_lbl, 0, 56);
+
+    bar_provider_session = make_bar(panel_provider_session, 0, 82, CONTENT_W - 32, 14);
+
+    lbl_provider_session_reset = lv_label_create(panel_provider_session);
+    lv_label_set_text(lbl_provider_session_reset, "---");
+    lv_obj_set_style_text_font(lbl_provider_session_reset, &font_styrene_20, 0);
+    lv_obj_set_style_text_color(lbl_provider_session_reset, COL_DIM, 0);
+    lv_obj_set_pos(lbl_provider_session_reset, 0, 102);
+
+    // Weekly panel
+    panel_provider_weekly = make_panel(provider_container, MARGIN, CONTENT_Y + 148, CONTENT_W, 130);
+
+    lbl_provider_weekly_pct = lv_label_create(panel_provider_weekly);
+    lv_label_set_text(lbl_provider_weekly_pct, "0%");
+    lv_obj_set_style_text_font(lbl_provider_weekly_pct, &font_styrene_48, 0);
+    lv_obj_set_style_text_color(lbl_provider_weekly_pct, COL_GREEN, 0);
+    lv_obj_set_pos(lbl_provider_weekly_pct, 0, 0);
+
+    lv_obj_t* lbl_prov_week_lbl = lv_label_create(panel_provider_weekly);
+    lv_label_set_text(lbl_prov_week_lbl, "Weekly");
+    lv_obj_set_style_text_font(lbl_prov_week_lbl, &font_styrene_20, 0);
+    lv_obj_set_style_text_color(lbl_prov_week_lbl, COL_DIM, 0);
+    lv_obj_set_pos(lbl_prov_week_lbl, 0, 56);
+
+    bar_provider_weekly = make_bar(panel_provider_weekly, 0, 82, CONTENT_W - 32, 14);
+
+    lbl_provider_weekly_reset = lv_label_create(panel_provider_weekly);
+    lv_label_set_text(lbl_provider_weekly_reset, "---");
+    lv_obj_set_style_text_font(lbl_provider_weekly_reset, &font_styrene_20, 0);
+    lv_obj_set_style_text_color(lbl_provider_weekly_reset, COL_DIM, 0);
+    lv_obj_set_pos(lbl_provider_weekly_reset, 0, 102);
+
+    // Credit panel (spans both original panel heights)
+    panel_provider_credit = make_credit_panel(provider_container, CONTENT_Y, 278,
+                                              &lbl_provider_credit_balance, &lbl_provider_credit_plan);
+    lv_obj_add_flag(panel_provider_credit, LV_OBJ_FLAG_HIDDEN);
+
+    lv_obj_add_flag(provider_container, LV_OBJ_FLAG_HIDDEN);
 }
 
 // ======== Network Screen (480x480) ========
@@ -431,6 +596,7 @@ void ui_init(void) {
 
     init_usage_screen(scr);
     init_codex_screen(scr);
+    init_provider_screen(scr);
     init_network_screen(scr);
     splash_init(scr);
 
@@ -476,6 +642,16 @@ void ui_update(const UsageData* data) {
     format_reset_time(pd->weekly_reset_mins, buf, sizeof(buf));
     lv_label_set_text(lbl_weekly_reset, buf);
 
+    // Toggle credit mode for Claude
+    set_credit_mode(panel_session, panel_weekly, panel_credit, pd->has_credits);
+    if (pd->has_credits) {
+        static char cbuf[32];
+        snprintf(cbuf, sizeof(cbuf), "$%.2f", (double)pd->credits_balance);
+        lv_label_set_text(lbl_credit_balance, cbuf);
+        lv_obj_set_style_text_color(lbl_credit_balance, status_color(pd->status), 0);
+        lv_label_set_text(lbl_credit_plan, pd->plan_type[0] ? pd->plan_type : "");
+    }
+
     // Codex screen (provider 1, if present and ok)
     if (data->provider_count > 1) {
         const ProviderData* cx = &data->providers[1];
@@ -494,13 +670,14 @@ void ui_update(const UsageData* data) {
             format_reset_time(cx->weekly_reset_mins, buf, sizeof(buf));
             lv_label_set_text(lbl_codex_weekly_reset, buf);
 
+            // Toggle credit mode for Codex
+            set_credit_mode(panel_codex_session, panel_codex_weekly, panel_codex_credit, cx->has_credits);
             if (cx->has_credits) {
-                static char credits_buf[32];
-                snprintf(credits_buf, sizeof(credits_buf), "$%.2f credits",
-                         (double)cx->credits_balance);
-                lv_label_set_text(lbl_codex_credits, credits_buf);
-            } else {
-                lv_label_set_text(lbl_codex_credits, cx->plan_type[0] ? cx->plan_type : "");
+                static char cbuf[32];
+                snprintf(cbuf, sizeof(cbuf), "$%.2f", (double)cx->credits_balance);
+                lv_label_set_text(lbl_codex_credit_balance, cbuf);
+                lv_obj_set_style_text_color(lbl_codex_credit_balance, status_color(cx->status), 0);
+                lv_label_set_text(lbl_codex_credit_plan, cx->plan_type[0] ? cx->plan_type : "");
             }
         }
     }
@@ -548,13 +725,38 @@ static bool ui_codex_enabled(void) {
     return web_server_codex_visible() && codex_available;
 }
 
+static bool ui_generic_enabled(void) {
+    return generic_provider_available &&
+           web_server_provider_visible(generic_provider_data.name);
+}
+
+static bool ui_selected_generic_has_splash(void) {
+    if (!ui_generic_enabled()) return false;
+    const char* sel = web_server_selected_provider_name();
+    if (!sel || strcmp(sel, "claude") == 0 || strcmp(sel, "codex") == 0) return false;
+    return splash_has_custom_for(sel);
+}
+
+static bool ui_splash_enabled(void) {
+    return ui_claude_enabled() || ui_selected_generic_has_splash();
+}
+
 static screen_t preferred_provider_usage_screen(void) {
-    if (web_server_selected_provider() == WEB_PROVIDER_CODEX) {
-        if (ui_codex_enabled())  return SCREEN_CODEX;
-        if (ui_claude_enabled()) return SCREEN_USAGE;
+    const char* sel = web_server_selected_provider_name();
+    // Check if selection matches a specific provider
+    if (strcmp(sel, "codex") == 0) {
+        if (ui_codex_enabled())   return SCREEN_CODEX;
+        if (ui_generic_enabled()) return SCREEN_PROVIDER;
+        if (ui_claude_enabled())  return SCREEN_USAGE;
+    } else if (strcmp(sel, "claude") == 0) {
+        if (ui_claude_enabled())  return SCREEN_USAGE;
+        if (ui_codex_enabled())   return SCREEN_CODEX;
+        if (ui_generic_enabled()) return SCREEN_PROVIDER;
     } else {
-        if (ui_claude_enabled()) return SCREEN_USAGE;
-        if (ui_codex_enabled())  return SCREEN_CODEX;
+        // selected is a generic provider
+        if (ui_generic_enabled()) return SCREEN_PROVIDER;
+        if (ui_claude_enabled())  return SCREEN_USAGE;
+        if (ui_codex_enabled())   return SCREEN_CODEX;
     }
     return SCREEN_NETWORK;
 }
@@ -565,6 +767,7 @@ static screen_t fallback_for_hidden_screen(screen_t screen) {
     case SCREEN_USAGE:
     case SCREEN_CODEX_SPLASH:
     case SCREEN_CODEX:
+    case SCREEN_PROVIDER:
         return preferred_provider_usage_screen();
     case SCREEN_NETWORK:
     default:
@@ -576,10 +779,12 @@ static bool screen_is_visible(screen_t screen) {
     switch (screen) {
     case SCREEN_SPLASH:
     case SCREEN_USAGE:
-        return ui_claude_enabled();
+        return screen == SCREEN_SPLASH ? ui_splash_enabled() : ui_claude_enabled();
     case SCREEN_CODEX_SPLASH:
     case SCREEN_CODEX:
         return ui_codex_enabled();
+    case SCREEN_PROVIDER:
+        return ui_generic_enabled();
     case SCREEN_NETWORK:
         return true;
     default:
@@ -598,9 +803,10 @@ static void global_click_cb(lv_event_t* e) {
 }
 
 void ui_show_screen(screen_t screen) {
-    lv_obj_add_flag(usage_container, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(codex_container, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(net_container, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(usage_container,    LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(codex_container,    LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(provider_container, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(net_container,      LV_OBJ_FLAG_HIDDEN);
     if (codex_icon_img) lv_obj_add_flag(codex_icon_img, LV_OBJ_FLAG_HIDDEN);
     splash_hide();
     codex_splash_hide();
@@ -619,6 +825,9 @@ void ui_show_screen(screen_t screen) {
     case SCREEN_CODEX_SPLASH:
         codex_splash_show();
         break;
+    case SCREEN_PROVIDER:
+        lv_obj_clear_flag(provider_container, LV_OBJ_FLAG_HIDDEN);
+        break;
     case SCREEN_NETWORK:
         lv_obj_clear_flag(net_container, LV_OBJ_FLAG_HIDDEN);
         break;
@@ -626,10 +835,10 @@ void ui_show_screen(screen_t screen) {
         break;
     }
 
-    // Logo: hidden on splash screens and Codex screen (cloud icon takes its place)
+    // Logo: hidden on splash screens, Codex screen (cloud icon), and generic provider screen
     if (logo_img) {
         bool hide_logo = (screen == SCREEN_SPLASH || screen == SCREEN_CODEX ||
-                          screen == SCREEN_CODEX_SPLASH);
+                          screen == SCREEN_CODEX_SPLASH || screen == SCREEN_PROVIDER);
         if (hide_logo) lv_obj_add_flag(logo_img, LV_OBJ_FLAG_HIDDEN);
         else           lv_obj_clear_flag(logo_img, LV_OBJ_FLAG_HIDDEN);
     }
@@ -641,13 +850,18 @@ void ui_show_screen(screen_t screen) {
 }
 
 void ui_cycle_screen(void) {
-    bool show_claude = ui_claude_enabled();
-    bool show_codex  = ui_codex_enabled();
+    bool show_claude   = ui_claude_enabled();
+    bool show_codex    = ui_codex_enabled();
+    bool show_generic  = ui_generic_enabled();
 
     screen_t next;
     if (current_screen == SCREEN_USAGE) {
-        next = show_codex ? SCREEN_CODEX : SCREEN_NETWORK;
+        if (show_codex)   next = SCREEN_CODEX;
+        else if (show_generic) next = SCREEN_PROVIDER;
+        else              next = SCREEN_NETWORK;
     } else if (current_screen == SCREEN_CODEX) {
+        next = show_generic ? SCREEN_PROVIDER : SCREEN_NETWORK;
+    } else if (current_screen == SCREEN_PROVIDER) {
         next = SCREEN_NETWORK;
     } else {
         next = preferred_provider_usage_screen();
@@ -680,30 +894,36 @@ void ui_reconcile_provider_visibility(bool prefer_primary_provider) {
 }
 
 void ui_toggle_splash(void) {
-    bool claude_on = ui_claude_enabled();
-    bool codex_on  = ui_codex_enabled();
+    bool claude_on  = ui_claude_enabled();
+    bool codex_on   = ui_codex_enabled();
+    bool generic_on = ui_generic_enabled();
 
     if (current_screen == SCREEN_SPLASH) {
-        // Claude splash → Usage Claude
-        if (claude_on) ui_show_screen(SCREEN_USAGE);
-        else if (codex_on) ui_show_screen(SCREEN_CODEX_SPLASH);
+        if (claude_on)       ui_show_screen(SCREEN_USAGE);
+        else if (generic_on) ui_show_screen(SCREEN_PROVIDER);
+        else if (codex_on)   ui_show_screen(SCREEN_CODEX_SPLASH);
     } else if (current_screen == SCREEN_USAGE) {
-        // Usage Claude → Codex splash (or back to Claude splash)
-        if (codex_on) ui_show_screen(SCREEN_CODEX_SPLASH);
-        else if (claude_on) ui_show_screen(SCREEN_SPLASH);
+        if (codex_on)        ui_show_screen(SCREEN_CODEX_SPLASH);
+        else if (generic_on) ui_show_screen(SCREEN_PROVIDER);
+        else if (claude_on)  ui_show_screen(SCREEN_SPLASH);
     } else if (current_screen == SCREEN_CODEX_SPLASH) {
-        // Codex splash → Usage Codex
-        if (codex_on) ui_show_screen(SCREEN_CODEX);
-        else if (claude_on) ui_show_screen(SCREEN_SPLASH);
+        if (codex_on)        ui_show_screen(SCREEN_CODEX);
+        else if (claude_on)  ui_show_screen(SCREEN_SPLASH);
+        else if (generic_on) ui_show_screen(SCREEN_PROVIDER);
     } else if (current_screen == SCREEN_CODEX) {
-        // Usage Codex → Claude splash (or back to Codex splash)
-        if (claude_on) ui_show_screen(SCREEN_SPLASH);
-        else if (codex_on) ui_show_screen(SCREEN_CODEX_SPLASH);
+        if (generic_on)      ui_show_screen(SCREEN_PROVIDER);
+        else if (claude_on)  ui_show_screen(SCREEN_SPLASH);
+        else if (codex_on)   ui_show_screen(SCREEN_CODEX_SPLASH);
+    } else if (current_screen == SCREEN_PROVIDER) {
+        if (ui_selected_generic_has_splash()) ui_show_screen(SCREEN_SPLASH);
+        else if (claude_on)  ui_show_screen(SCREEN_SPLASH);
+        else if (codex_on)   ui_show_screen(SCREEN_CODEX_SPLASH);
+        else if (generic_on) ui_show_screen(SCREEN_PROVIDER);
     } else {
-        // For other screens (NETWORK, etc.), go to the preferred provider's splash
         screen_t preferred = preferred_provider_usage_screen();
-        if (preferred == SCREEN_CODEX && codex_on) ui_show_screen(SCREEN_CODEX_SPLASH);
-        else if (preferred == SCREEN_USAGE && claude_on) ui_show_screen(SCREEN_SPLASH);
+        if      (preferred == SCREEN_CODEX    && codex_on)   ui_show_screen(SCREEN_CODEX_SPLASH);
+        else if (preferred == SCREEN_USAGE    && ui_splash_enabled()) ui_show_screen(SCREEN_SPLASH);
+        else if (preferred == SCREEN_PROVIDER && generic_on) ui_show_screen(SCREEN_PROVIDER);
     }
 }
 
@@ -752,4 +972,56 @@ void ui_update_battery(int percent, bool charging) {
     }
     lv_image_set_src(battery_img, &battery_dscs[idx]);
     apply_battery_visibility();
+}
+
+void ui_set_generic_provider(const ProviderData* pd) {
+    bool was_available = generic_provider_available;
+    if (!pd || !pd->ok) {
+        generic_provider_available = false;
+        memset(&generic_provider_data, 0, sizeof(generic_provider_data));
+        if (was_available) ui_reconcile_provider_visibility(false);
+        return;
+    }
+
+    generic_provider_available = true;
+    generic_provider_data = *pd;
+
+    // Update the screen widgets
+    lv_color_t accent = provider_accent_color(pd->name);
+    lv_label_set_text(lbl_provider_title, provider_display_name(pd->name));
+    lv_obj_set_style_text_color(lbl_provider_title, accent, 0);
+
+    char buf[48];
+    int s_pct = (int)(pd->session_pct + 0.5f);
+    lv_label_set_text_fmt(lbl_provider_session_pct, "%d%%", s_pct);
+    lv_obj_set_style_text_color(lbl_provider_session_pct, pct_color(pd->session_pct), 0);
+    lv_bar_set_value(bar_provider_session, s_pct, LV_ANIM_ON);
+    lv_obj_set_style_bg_color(bar_provider_session, pct_color(pd->session_pct), LV_PART_INDICATOR);
+    format_reset_time(pd->session_reset_mins, buf, sizeof(buf));
+    lv_label_set_text(lbl_provider_session_reset, buf);
+
+    int w_pct = (int)(pd->weekly_pct + 0.5f);
+    lv_label_set_text_fmt(lbl_provider_weekly_pct, "%d%%", w_pct);
+    lv_obj_set_style_text_color(lbl_provider_weekly_pct, pct_color(pd->weekly_pct), 0);
+    lv_bar_set_value(bar_provider_weekly, w_pct, LV_ANIM_ON);
+    lv_obj_set_style_bg_color(bar_provider_weekly, pct_color(pd->weekly_pct), LV_PART_INDICATOR);
+    format_reset_time(pd->weekly_reset_mins, buf, sizeof(buf));
+    lv_label_set_text(lbl_provider_weekly_reset, buf);
+
+    bool detail_panel_mode = pd->has_credits || !pd->metrics_available;
+    set_credit_mode(panel_provider_session, panel_provider_weekly, panel_provider_credit, detail_panel_mode);
+    if (pd->has_credits) {
+        static char cbuf[32];
+        snprintf(cbuf, sizeof(cbuf), "$%.4f", (double)pd->credits_balance);
+        lv_label_set_text(lbl_provider_credit_balance, cbuf);
+        lv_obj_set_style_text_color(lbl_provider_credit_balance, status_color(pd->status), 0);
+        lv_label_set_text(lbl_provider_credit_plan, pd->plan_type[0] ? pd->plan_type : "");
+    } else if (!pd->metrics_available) {
+        lv_label_set_text(lbl_provider_credit_balance, "Available");
+        lv_obj_set_style_text_color(lbl_provider_credit_balance, accent, 0);
+        lv_label_set_text(lbl_provider_credit_plan,
+                          pd->note[0] ? pd->note : "Usage metrics unavailable");
+    }
+
+    if (!was_available) ui_reconcile_provider_visibility(false);
 }

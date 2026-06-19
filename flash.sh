@@ -5,7 +5,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PORT="${1:-/dev/ttyACM0}"
 
-echo "=== Flashing Claude Usage Tracker ==="
+echo "=== Flashing PocketMeter ==="
 echo "Port: $PORT"
 echo ""
 

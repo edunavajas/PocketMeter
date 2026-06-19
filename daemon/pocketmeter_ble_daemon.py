@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Claude Usage Tracker Daemon (BLE) — macOS port of claude-usage-daemon.sh.
+"""PocketMeter BLE Daemon — macOS port of pocketmeter-ble-daemon.sh.
 
 Polls Claude API rate-limit headers and writes a JSON payload to the
 ESP32 "Claude Controller" peripheral over a custom GATT service. Uses
@@ -21,7 +21,13 @@ import httpx
 from bleak import BleakClient, BleakScanner
 from bleak.exc import BleakError
 
-DEVICE_NAME = "Claude Controller"
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from claude_oauth import get_access_token as get_claude_access_token
+
+DEVICE_NAME = "Claude Controller"  # Legacy BLE name still advertised by the firmware.
 SERVICE_UUID = "4c41555a-4465-7669-6365-000000000001"
 RX_CHAR_UUID = "4c41555a-4465-7669-6365-000000000002"
 REQ_CHAR_UUID = "4c41555a-4465-7669-6365-000000000004"
@@ -34,7 +40,8 @@ SCAN_TIMEOUT = 8.0
 # Linux: token lives in ~/.claude/.credentials.json.
 KEYCHAIN_SERVICE = "Claude Code-credentials"
 CREDENTIALS_PATH = Path.home() / ".claude" / ".credentials.json"
-SAVED_ADDR_FILE = Path.home() / ".config" / "claude-usage-monitor" / "ble-address"
+SAVED_ADDR_FILE = Path.home() / ".config" / "pocketmeter" / "ble-address"
+LEGACY_SAVED_ADDR_FILE = Path.home() / ".config" / "claude-usage-monitor" / "ble-address"
 
 API_URL = "https://api.anthropic.com/v1/messages"
 API_HEADERS_TEMPLATE = {
@@ -114,11 +121,11 @@ def _read_token_keychain() -> str | None:
 
 def _read_token_file() -> str | None:
     try:
-        raw = CREDENTIALS_PATH.read_text()
-    except OSError as e:
+        token, _oauth = get_claude_access_token(CREDENTIALS_PATH)
+        return token
+    except Exception as e:
         log(f"Error reading credentials: {e}")
         return None
-    return _extract_access_token(raw)
 
 
 def read_token() -> str | None:
@@ -128,17 +135,18 @@ def read_token() -> str | None:
 
 
 def load_cached_address() -> str | None:
-    if not SAVED_ADDR_FILE.exists():
-        return None
-    addr = SAVED_ADDR_FILE.read_text().strip()
-    # Accept both Linux MAC (AA:BB:CC:DD:EE:FF) and macOS CoreBluetooth UUID
-    # (E621E1F8-C36C-495A-93FC-0C247A3E6E5F).
-    if re.fullmatch(r"(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}", addr) or re.fullmatch(
-        r"[0-9A-Fa-f]{8}-(?:[0-9A-Fa-f]{4}-){3}[0-9A-Fa-f]{12}", addr
-    ):
-        return addr
-    log("Cached address malformed, discarding")
-    SAVED_ADDR_FILE.unlink(missing_ok=True)
+    for cache_file in (SAVED_ADDR_FILE, LEGACY_SAVED_ADDR_FILE):
+        if not cache_file.exists():
+            continue
+        addr = cache_file.read_text().strip()
+        # Accept both Linux MAC (AA:BB:CC:DD:EE:FF) and macOS CoreBluetooth UUID
+        # (E621E1F8-C36C-495A-93FC-0C247A3E6E5F).
+        if re.fullmatch(r"(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}", addr) or re.fullmatch(
+            r"[0-9A-Fa-f]{8}-(?:[0-9A-Fa-f]{4}-){3}[0-9A-Fa-f]{12}", addr
+        ):
+            return addr
+        log("Cached address malformed, discarding")
+        cache_file.unlink(missing_ok=True)
     return None
 
 
@@ -166,6 +174,19 @@ async def poll_api(token: str) -> dict | None:
     except httpx.HTTPError as e:
         log(f"API call failed: {e}")
         return None
+    if resp.status_code == 401 and sys.platform != "darwin":
+        try:
+            refreshed_token, _oauth = get_claude_access_token(CREDENTIALS_PATH, force_refresh=True)
+        except Exception as e:
+            log(f"Token refresh failed after 401: {e}")
+        else:
+            headers["Authorization"] = f"Bearer {refreshed_token}"
+            try:
+                async with httpx.AsyncClient(timeout=20.0) as http:
+                    resp = await http.post(API_URL, headers=headers, json=API_BODY)
+            except httpx.HTTPError as e:
+                log(f"API retry failed: {e}")
+                return None
     if resp.status_code >= 400:
         log(f"API HTTP {resp.status_code}: {resp.text[:200]}")
         return None
@@ -295,7 +316,7 @@ async def main() -> None:
         except NotImplementedError:
             signal.signal(sig, _stop)
 
-    log("=== Claude Usage Tracker Daemon (BLE, macOS) ===")
+    log("=== PocketMeter BLE Daemon (macOS) ===")
     log(f"Poll interval: {POLL_INTERVAL}s")
 
     backoff = 1
@@ -318,6 +339,7 @@ async def main() -> None:
         if not ok:
             log("Invalidating cached address")
             SAVED_ADDR_FILE.unlink(missing_ok=True)
+            LEGACY_SAVED_ADDR_FILE.unlink(missing_ok=True)
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=backoff)
             except asyncio.TimeoutError:

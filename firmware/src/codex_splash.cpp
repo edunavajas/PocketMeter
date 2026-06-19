@@ -1,5 +1,6 @@
 #include "codex_splash.h"
 #include "codex_animations.h"
+#include "splash.h"
 #include "theme.h"
 #include <Arduino.h>
 #include <string.h>
@@ -10,13 +11,16 @@
 #define CANVAS_W (GRID * CELL)
 #define CANVAS_H (GRID * CELL)
 
-static lv_obj_t  *container  = NULL;
-static lv_obj_t  *canvas     = NULL;
-static uint16_t  *canvas_buf = NULL;
-static uint16_t   cur_anim   = 0;
-static uint16_t   cur_frame  = 0;
-static uint32_t   frame_ms   = 0;
-static bool       active     = false;
+static lv_obj_t  *container    = NULL;
+static lv_obj_t  *canvas       = NULL;
+static uint16_t  *canvas_buf   = NULL;
+static uint16_t   cur_anim     = 0;
+static uint16_t   cur_frame    = 0;
+static uint32_t   frame_ms     = 0;
+static bool       active       = false;
+// Custom pet animation frame state (separate from built-in cloud)
+static int        cust_frame   = 0;
+static uint32_t   cust_frame_ms = 0;
 
 static void render_frame(const uint8_t *cells, const uint16_t *palette) {
     for (int gy = 0; gy < GRID; gy++) {
@@ -62,7 +66,20 @@ void codex_splash_init(lv_obj_t *parent) {
 }
 
 void codex_splash_tick(void) {
-    if (!active || CODEX_ANIM_COUNT == 0) return;
+    if (!active) return;
+    if (splash_has_custom_for("codex")) {
+        uint16_t fc = splash_custom_frame_count();
+        if (fc == 0) return;
+        uint16_t hold = splash_custom_hold_ms(cust_frame);
+        if (millis() - cust_frame_ms >= hold) {
+            cust_frame = (cust_frame + 1) % fc;
+            cust_frame_ms = millis();
+            const uint8_t* px = splash_custom_frame_pixels(cust_frame);
+            if (px) render_frame(px, splash_custom_palette());
+        }
+        return;
+    }
+    if (CODEX_ANIM_COUNT == 0) return;
     const codex_anim_def_t *a = &codex_anims[cur_anim];
     if (a->frame_count == 0) return;
     if (millis() - frame_ms >= a->holds[cur_frame]) {
@@ -82,7 +99,12 @@ void codex_splash_next(void) {
 }
 
 void codex_splash_show(void) {
-    if (CODEX_ANIM_COUNT > 0) {
+    if (splash_has_custom_for("codex")) {
+        cust_frame    = 0;
+        cust_frame_ms = millis();
+        const uint8_t* px = splash_custom_frame_pixels(0);
+        if (px) render_frame(px, splash_custom_palette());
+    } else if (CODEX_ANIM_COUNT > 0) {
         cur_frame = 0;
         frame_ms  = millis();
         render_frame(codex_anims[cur_anim].frames[0], codex_anims[cur_anim].palette);

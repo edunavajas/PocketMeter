@@ -32,6 +32,45 @@ SensorQMI8658 imu;
 
 static UsageData usage = {};
 
+// Find the provider that should be displayed on SCREEN_PROVIDER and push it to UI.
+// Called both when new data arrives and when selected_provider changes.
+static void update_generic_provider() {
+    const char* sel = web_server_selected_provider_name();
+
+    // If the selected provider is claude or codex they have dedicated screens
+    if (strcmp(sel, "claude") == 0 || strcmp(sel, "codex") == 0) {
+        // Still check if any non-primary provider has data, fall back to first one
+        bool found = false;
+        for (int i = 0; i < usage.provider_count && i < MAX_PROVIDERS; ++i) {
+            const char* n = usage.providers[i].name;
+            if (strcmp(n, "claude") != 0 && strcmp(n, "codex") != 0 && usage.providers[i].ok) {
+                ui_set_generic_provider(&usage.providers[i]);
+                found = true;
+                break;
+            }
+        }
+        if (!found) ui_set_generic_provider(nullptr);
+        return;
+    }
+
+    // Find the explicitly selected provider
+    for (int i = 0; i < usage.provider_count && i < MAX_PROVIDERS; ++i) {
+        if (strcmp(usage.providers[i].name, sel) == 0 && usage.providers[i].ok) {
+            ui_set_generic_provider(&usage.providers[i]);
+            return;
+        }
+    }
+    // Selected provider not found → use first available non-claude/codex
+    for (int i = 0; i < usage.provider_count && i < MAX_PROVIDERS; ++i) {
+        const char* n = usage.providers[i].name;
+        if (strcmp(n, "claude") != 0 && strcmp(n, "codex") != 0 && usage.providers[i].ok) {
+            ui_set_generic_provider(&usage.providers[i]);
+            return;
+        }
+    }
+    ui_set_generic_provider(nullptr);
+}
+
 // ---- Touch interrupt + shared state ----
 static volatile bool     touch_pressed = false;
 static volatile uint16_t touch_x = 0;
@@ -172,7 +211,7 @@ static bool parse_json(const char* json, UsageData* out) {
         out->provider_count = 0;
         
         for (JsonObject provider : providers) {
-            if (out->provider_count >= 2) break;
+            if (out->provider_count >= MAX_PROVIDERS) break;
             
             ProviderData* pd = &out->providers[out->provider_count];
             
@@ -185,8 +224,15 @@ static bool parse_json(const char* json, UsageData* out) {
             strlcpy(pd->plan_type, provider["plan_type"] | "", sizeof(pd->plan_type));
             pd->credits_balance = provider["credits_balance"] | 0.0f;
             pd->has_credits = provider["has_credits"] | false;
+            pd->metrics_available = provider["metrics_available"].is<bool>()
+                                        ? provider["metrics_available"].as<bool>()
+                                        : true;
             pd->simulated = provider["simulated"] | false;
             pd->ok = provider["ok"] | false;
+            pd->configured = provider["configured"].is<bool>()
+                                 ? provider["configured"].as<bool>()
+                                 : pd->ok;
+            strlcpy(pd->note, provider["note"] | "", sizeof(pd->note));
             strlcpy(pd->error, provider["error"] | "", sizeof(pd->error));
             
             out->provider_count++;
@@ -207,7 +253,10 @@ static bool parse_json(const char* json, UsageData* out) {
     strlcpy(pd->status, doc["st"] | "unknown", sizeof(pd->status));
     pd->ok = doc["ok"] | false;
     pd->has_credits = false;
+    pd->metrics_available = true;
     pd->simulated = false;
+    pd->configured = pd->ok;
+    pd->note[0] = '\0';
     pd->error[0] = '\0';
     
     out->provider_count = 1;
@@ -448,16 +497,24 @@ void loop() {
     {
         static bool last_claude_vis = true;
         static bool last_codex_vis  = true;
-        static web_provider_t last_selected_provider = WEB_PROVIDER_CLAUDE;
-        bool claude_vis = web_server_claude_visible();
-        bool codex_vis  = web_server_codex_visible();
-        web_provider_t selected_provider = web_server_selected_provider();
+        static char last_sel_name[PROVIDER_NAME_LEN] = "claude";
+        static char last_splash_pin[64] = "";
+        bool        claude_vis   = web_server_claude_visible();
+        bool        codex_vis    = web_server_codex_visible();
+        const char* sel_name     = web_server_selected_provider_name();
+        const char* splash_pin   = web_server_splash_pin();
         if (claude_vis != last_claude_vis || codex_vis != last_codex_vis ||
-            selected_provider != last_selected_provider) {
+            strcmp(sel_name, last_sel_name) != 0) {
             last_claude_vis = claude_vis;
             last_codex_vis  = codex_vis;
-            last_selected_provider = selected_provider;
+            strlcpy(last_sel_name, sel_name, sizeof(last_sel_name));
+            // Re-derive the generic provider from last parsed usage data
+            update_generic_provider();
             ui_reconcile_provider_visibility(true);
+        }
+        if (strcmp(splash_pin, last_splash_pin) != 0) {
+            strlcpy(last_splash_pin, splash_pin, sizeof(last_splash_pin));
+            splash_pin_by_name(splash_pin);
         }
     }
 
@@ -476,13 +533,24 @@ void loop() {
                     g_before, g_after, current->session_pct);
                 if (splash_is_active()) splash_pick_for_current_rate();
             }
-            // Enable Codex screen only when provider[1] has valid data
-            bool codex_ok = (usage.provider_count > 1 && usage.providers[1].ok);
+            // Enable Codex screen when any codex provider has data
+            bool codex_ok = false;
+            for (int i = 0; i < usage.provider_count && i < MAX_PROVIDERS; ++i) {
+                if (strcmp(usage.providers[i].name, "codex") == 0 && usage.providers[i].ok) {
+                    codex_ok = true;
+                    break;
+                }
+            }
             ui_set_codex_available(codex_ok);
+            // Derive and push generic provider (Gemini, Copilot, etc.)
+            update_generic_provider();
             ui_update(&usage);
             web_server_set_last_data(&usage);
-            Serial.printf("WiFi: received %d providers, codex=%s\n",
-                usage.provider_count, codex_ok ? "yes" : "no");
+            int ok_count = 0;
+            for (int i = 0; i < usage.provider_count && i < MAX_PROVIDERS; ++i)
+                if (usage.providers[i].ok) ok_count++;
+            Serial.printf("WiFi: %d providers received, %d ok, codex=%s\n",
+                usage.provider_count, ok_count, codex_ok ? "yes" : "no");
         } else {
             Serial.println("WiFi: JSON parse failed");
         }

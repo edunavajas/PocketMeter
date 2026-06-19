@@ -1,0 +1,17 @@
+[Unit]
+Description=PocketMeter Web Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment="POCKETMETER_WEB_PORT=8080"
+Environment="PYTHON=python3"
+ExecStart=/bin/bash %h/Aplica/PocketMeter/daemon/web-server.sh
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

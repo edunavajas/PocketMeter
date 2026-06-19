@@ -2,13 +2,13 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SERVICE_NAME="claude-usage-daemon"
+SERVICE_NAME="pocketmeter-ble-daemon"
 SERVICE_FILE="$SCRIPT_DIR/daemon/$SERVICE_NAME.service"
 USER_SERVICE_DIR="$HOME/.config/systemd/user"
 
-echo "=== Claude Usage Tracker - Install ==="
+echo "=== PocketMeter BLE Install ==="
 echo "Legacy BLE installer for PocketMeter."
-echo "For the current WiFi+HTTP flow, use: python3 daemon/clawdmeter-daemon.py"
+echo "For the current WiFi+HTTP flow, use: python3 daemon/pocketmeter-daemon.py"
 echo ""
 
 # Check dependencies
@@ -39,7 +39,7 @@ echo ""
 echo "First-time Bluetooth pairing:"
 echo "  1. Power on the SC01 Plus"
 echo "  2. Run: bluetoothctl scan le"
-echo "  3. Find 'Claude Controller' and note the MAC address"
+echo "  3. Find the device currently advertised as 'Claude Controller' and note the MAC address"
 echo "  4. Run: bluetoothctl pair <MAC>"
 echo "  5. Run: bluetoothctl trust <MAC>"
 echo "  6. Start the daemon: systemctl --user start $SERVICE_NAME"

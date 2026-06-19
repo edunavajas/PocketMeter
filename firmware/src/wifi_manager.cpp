@@ -1,14 +1,34 @@
 #include "wifi_manager.h"
 #include "config.h"
+#include <ESPmDNS.h>
 #include <WiFi.h>
 
 static bool connected = false;
+static bool mdns_started = false;
 static char ip_str[16] = "0.0.0.0";
 static int last_rssi = 0;
+
+static void start_mdns(void) {
+    if (mdns_started || WiFi.status() != WL_CONNECTED) return;
+
+    if (MDNS.begin(WIFI_HOSTNAME)) {
+        mdns_started = true;
+        Serial.printf("mDNS: responder started at http://%s.local/\n", WIFI_HOSTNAME);
+    } else {
+        Serial.printf("mDNS: failed to start for %s.local\n", WIFI_HOSTNAME);
+    }
+}
+
+static void stop_mdns(void) {
+    if (!mdns_started) return;
+    MDNS.end();
+    mdns_started = false;
+}
 
 void wifi_init(void) {
     Serial.printf("WiFi: connecting to %s...\n", WIFI_SSID);
     WiFi.mode(WIFI_STA);
+    WiFi.setHostname(WIFI_HOSTNAME);
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
     unsigned long start = millis();
@@ -23,6 +43,7 @@ void wifi_init(void) {
         snprintf(ip_str, sizeof(ip_str), "%s", WiFi.localIP().toString().c_str());
         last_rssi = WiFi.RSSI();
         Serial.printf("WiFi: connected, IP=%s, RSSI=%d dBm\n", ip_str, last_rssi);
+        start_mdns();
     } else {
         connected = false;
         Serial.println("WiFi: connection failed, will retry in loop");
@@ -39,6 +60,7 @@ void wifi_check_connection(void) {
         if (connected) {
             connected = false;
             Serial.println("WiFi: disconnected, reconnecting...");
+            stop_mdns();
         }
         WiFi.reconnect();
         // Wait a bit for reconnect
@@ -51,6 +73,7 @@ void wifi_check_connection(void) {
             snprintf(ip_str, sizeof(ip_str), "%s", WiFi.localIP().toString().c_str());
             last_rssi = WiFi.RSSI();
             Serial.printf("WiFi: reconnected, IP=%s, RSSI=%d dBm\n", ip_str, last_rssi);
+            start_mdns();
         }
     } else {
         if (!connected) {
@@ -58,6 +81,7 @@ void wifi_check_connection(void) {
             snprintf(ip_str, sizeof(ip_str), "%s", WiFi.localIP().toString().c_str());
             last_rssi = WiFi.RSSI();
             Serial.printf("WiFi: connected, IP=%s, RSSI=%d dBm\n", ip_str, last_rssi);
+            start_mdns();
         }
         last_rssi = WiFi.RSSI();
     }
@@ -83,4 +107,8 @@ int wifi_get_rssi(void) {
 
 const char* wifi_get_ssid(void) {
     return WIFI_SSID;
+}
+
+const char* wifi_get_hostname(void) {
+    return WIFI_HOSTNAME;
 }

@@ -3,9 +3,10 @@
 
 enum screen_t {
     SCREEN_SPLASH,
-    SCREEN_USAGE,
-    SCREEN_CODEX,         // only shown when Codex is configured
-    SCREEN_CODEX_SPLASH,  // full-screen cloud animation (tap from SCREEN_CODEX)
+    SCREEN_USAGE,         // Claude usage
+    SCREEN_CODEX,         // Codex usage (only shown when Codex is configured)
+    SCREEN_CODEX_SPLASH,  // Codex full-screen cloud animation
+    SCREEN_PROVIDER,      // Generic provider screen (Gemini, Copilot, etc.)
     SCREEN_NETWORK,
     SCREEN_COUNT,
 };
@@ -21,3 +22,5 @@ void ui_update_network_status(bool connected, const char* ssid, const char* ip, 
 void ui_update_battery(int percent, bool charging);
 void ui_set_codex_available(bool available);
 void ui_reconcile_provider_visibility(bool prefer_primary_provider);
+// Set the data shown on SCREEN_PROVIDER. Pass nullptr to hide the screen.
+void ui_set_generic_provider(const ProviderData* pd);
