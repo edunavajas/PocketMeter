@@ -1,0 +1,27 @@
+firmware/src/wifi_credentials.h.example
+  s_f01cee81a515a2::t_0949d871d84c13 1-7
+daemon/pocketmeter-stack.sh
+  s_f01cee81a515a2::t_1f339a5af134e8 84-88
+.gitignore
+  s_f01cee81a515a2::t_043abed95f638c 1-3,27-28
+daemon/web-server.sh
+  s_f01cee81a515a2::t_3c61e38ca571f7 20-24
+firmware/src/config.h
+  s_f01cee81a515a2::t_25f30da6a8e32b 3-11
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.8",
+  "base_commit_sha": "b5a293283401681152f23f348c921991a4f3f24d",
+  "prompts": {},
+  "sessions": {
+    "s_f01cee81a515a2": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_11fef2009ffeZdkH4V2OqBYFbz",
+        "model": "k2p7"
+      },
+      "human_author": "Edu Navajas <eduardonco@ext.inditex.com>"
+    }
+  }
+}
